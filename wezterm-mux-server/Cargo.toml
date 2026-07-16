@@ -16,7 +16,7 @@ env-bootstrap = { path = "../env-bootstrap" }
 libc = "0.2"
 log = "0.4"
 mux = { path = "../mux" }
-mlua = "0.9"
+mlua = "0.10"
 openssl = "0.10"
 portable-pty = { path = "../pty", features = ["serde_support"]}
 promise = { path = "../promise" }
@@ -30,5 +30,5 @@ wezterm-term = { path = "../term" }
 winapi = { version = "0.3", features = [ "winuser" ]}
 
 [target.'cfg(windows)'.build-dependencies]
-embed-resource = "1.7"
+embed-resource = "3.0"
 cc = "1.0"
