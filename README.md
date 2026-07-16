@@ -15,7 +15,10 @@ was installed when this fork was created.
 ## V1
 
 - Native, resizable, toggleable explorer beside terminal tabs and splits
-- Automatic reveal/highlight for the focused native pane's working directory
+- Code OSS Dark Modern explorer styling with proportional UI text, 22 px tree
+  rows, and native vector tree/file/folder controls
+- Folder-scoped Follow mode: the focused pane's working directory is the only
+  visible root, so parent and sibling folders are not shown
 - tmux-aware reveal based on the selected tmux pane, including pane changes
 - Follow, Project Follow, and Locked modes
 - Multiple named, reorderable workspace roots
@@ -24,7 +27,6 @@ was installed when this fork was created.
 - New terminal tab or split from a selected directory
 - Persistent sidebar visibility, width, roots, expansion, follow mode, and
   hidden-file preference
-- Pane status showing pane ID, process, context source, CWD, and workspace
 - Non-destructive inline errors for inaccessible or invalid paths
 
 Cosmos Term is the terminal application itself—not a wrapper around WezTerm
@@ -34,10 +36,10 @@ and not an editor embedding a terminal.
 
 Press `Command+Shift+E` to show or hide the explorer. The header buttons are:
 
-- `+`: add a workspace root
-- `◎`: reveal the active pane
-- `⇄`: cycle Follow → Project Follow → Locked
-- `◦` / `•`: hide or show dotfiles
+- folder-plus: add a workspace root and lock the view to it
+- target: reveal the active pane
+- opposing arrows: cycle Follow → Project Follow → Locked
+- eye: hide or show dotfiles
 
 Click a row to select and expand/collapse it. Double-click a directory to open
 it in a new tab. Drag the divider to resize the sidebar.
@@ -61,6 +63,9 @@ When the explorer has keyboard focus:
 
 All explorer actions are also available through the command palette and the
 View menu.
+
+`Command+W` closes the current tab immediately. `Command+Q` keeps the
+protected whole-application autosave flow.
 
 ## Isolation from WezTerm
 
@@ -116,3 +121,8 @@ Cosmos Term is derived from [WezTerm](https://github.com/wez/wezterm), created
 by Wez Furlong and contributors. The original copyright, MIT license, bundled
 font licenses, and upstream history are retained. Cosmos-specific work is also
 distributed under the repository's MIT license.
+
+The explorer's layout metrics and Dark Modern palette are based on the
+MIT-licensed [Microsoft Code - OSS](https://github.com/microsoft/vscode)
+explorer, list/tree, pane-header, and default-theme sources. Cosmos Term uses
+its own native renderer and vector icons; it does not bundle or launch VS Code.

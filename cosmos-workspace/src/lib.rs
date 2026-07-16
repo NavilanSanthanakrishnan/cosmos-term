@@ -391,20 +391,44 @@ impl DirectoryCache {
     pub fn rows(&self, state: &ExplorerState) -> Vec<ExplorerRow> {
         let mut rows = vec![];
         for (root_index, root) in state.roots.iter().enumerate() {
-            let expanded = state.expanded.contains(&root.path);
-            rows.push(ExplorerRow {
-                path: Some(root.path.clone()),
-                root_index,
-                depth: 0,
-                label: root.name.clone(),
-                kind: ExplorerRowKind::Root,
-                expanded,
-            });
-            if expanded {
-                self.append_children(state, root_index, &root.path, 1, &mut rows);
-            }
+            self.append_root(state, root, root_index, &mut rows);
         }
         rows
+    }
+
+    /// Build the explorer tree for a single visible root. This is used by the
+    /// UI's folder-scoped Follow modes so saved multi-root workspace state does
+    /// not leak parent or sibling directories into the current view.
+    pub fn rows_for_root(
+        &self,
+        state: &ExplorerState,
+        root: &WorkspaceRoot,
+        root_index: usize,
+    ) -> Vec<ExplorerRow> {
+        let mut rows = vec![];
+        self.append_root(state, root, root_index, &mut rows);
+        rows
+    }
+
+    fn append_root(
+        &self,
+        state: &ExplorerState,
+        root: &WorkspaceRoot,
+        root_index: usize,
+        rows: &mut Vec<ExplorerRow>,
+    ) {
+        let expanded = state.expanded.contains(&root.path);
+        rows.push(ExplorerRow {
+            path: Some(root.path.clone()),
+            root_index,
+            depth: 0,
+            label: root.name.clone(),
+            kind: ExplorerRowKind::Root,
+            expanded,
+        });
+        if expanded {
+            self.append_children(state, root_index, &root.path, 1, rows);
+        }
     }
 
     fn append_children(
@@ -798,6 +822,56 @@ mod tests {
         assert_eq!(listing.entries[0].name, "z-dir");
         assert_eq!(listing.entries[1].name, "a-file");
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn scoped_rows_only_include_the_visible_root() {
+        let visible = temporary_path("visible-root");
+        let sibling = temporary_path("sibling-root");
+        fs::create_dir_all(visible.join("inside")).unwrap();
+        fs::create_dir_all(sibling.join("outside")).unwrap();
+
+        let mut state = ExplorerState::default();
+        state.add_root(visible.clone());
+        state.add_root(sibling.clone());
+        state.expanded.insert(visible.clone());
+        state.expanded.insert(sibling.clone());
+
+        let mut cache = DirectoryCache::default();
+        cache.apply(DirectoryListing::read(&visible, false));
+        cache.apply(DirectoryListing::read(&sibling, false));
+        let scoped = WorkspaceRoot::new(visible.clone());
+        let rows = cache.rows_for_root(&state, &scoped, usize::MAX);
+
+        assert!(rows.iter().any(|row| row.label == "inside"));
+        assert!(!rows.iter().any(|row| row.label == "outside"));
+
+        let _ = fs::remove_dir_all(visible);
+        let _ = fs::remove_dir_all(sibling);
+    }
+
+    #[test]
+    fn scoped_rows_do_not_show_parent_siblings() {
+        let parent = temporary_path("scoped-parent");
+        let visible = parent.join("cosmos");
+        fs::create_dir_all(visible.join("src")).unwrap();
+        fs::create_dir_all(parent.join("unrelated")).unwrap();
+
+        let mut state = ExplorerState::default();
+        state.add_root(parent.clone());
+        state.expanded.insert(parent.clone());
+        state.expanded.insert(visible.clone());
+
+        let mut cache = DirectoryCache::default();
+        cache.apply(DirectoryListing::read(&parent, false));
+        cache.apply(DirectoryListing::read(&visible, false));
+        let rows = cache.rows_for_root(&state, &WorkspaceRoot::new(visible.clone()), usize::MAX);
+
+        assert_eq!(rows[0].path.as_deref(), Some(visible.as_path()));
+        assert!(rows.iter().any(|row| row.label == "src"));
+        assert!(!rows.iter().any(|row| row.label == "unrelated"));
+
+        let _ = fs::remove_dir_all(parent);
     }
 
     #[test]

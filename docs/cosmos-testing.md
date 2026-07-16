@@ -11,8 +11,8 @@ git diff --check
 ```
 
 The workspace tests cover follow expansion, Locked behavior, root matching and
-deduplication, directory sorting/filtering, persistence, and process
-detection.
+deduplication, folder-scoped row isolation, directory sorting/filtering,
+persistence, and process detection.
 
 ## Release bundle
 
@@ -59,18 +59,18 @@ It must print no inherited WezTerm protocol/config values and no stale
 
 Use only panes created in Cosmos Term.
 
-1. Launch with a known repository CWD and confirm the matching root is
-   highlighted.
-2. Run `cd` into a nested directory and confirm the explorer expands and
-   highlights it.
+1. Launch with a known repository CWD and confirm that folder is the sole
+   visible root.
+2. Run `cd` into a nested directory and confirm it becomes the sole visible
+   root without parent or sibling folders.
 3. Create a split with a different CWD. Switch focus in both directions and
    confirm the highlight and status follow the focused pane.
 4. Create and remove a directory under an expanded root. Confirm it appears
    and disappears without restarting.
 5. Resize the divider, change expansion state, restart, and confirm the width,
    roots, expansion, and follow mode persist.
-6. Select Locked, change the terminal CWD, and confirm status updates while
-   expansion state remains byte-for-byte unchanged.
+6. Select Locked, change the terminal CWD, and confirm the visible root and
+   expansion state remain byte-for-byte unchanged.
 7. Open a selected directory in a tab and a split.
 8. Use an invalid or inaccessible root and confirm an inline error without a
    crash or blocked terminal.

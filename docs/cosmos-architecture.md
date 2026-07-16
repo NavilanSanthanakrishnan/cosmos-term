@@ -41,7 +41,8 @@ The native window adapter owns:
 
 - persisted `ExplorerUi` state
 - active-pane polling and context application
-- render rows, header controls, status, highlights, and errors
+- Code OSS-inspired sidebar title, section header, proportional row text,
+  vector controls, list highlights, and inline errors
 - mouse hit targets, scrolling, divider drag, and row activation
 - keyboard navigation and root prompts
 - spawning selected directories into tabs or splits
@@ -64,8 +65,10 @@ The surrounding changes are intentionally limited to:
 ## Pane following
 
 For a native pane, WezTerm's reported CWD is used. The explorer resolves the
-longest matching workspace root, discovers a containing Git project, and
-applies the selected follow mode.
+longest matching saved workspace root, discovers a containing Git project,
+and applies the selected follow mode. The visible root is transient and
+independent from saved multi-root state, which prevents parent or sibling
+roots from leaking into a folder-scoped view.
 
 For tmux, the native terminal pane still reports the outer shell's CWD, so the
 foreground process and TTY are also inspected. When the foreground process is
@@ -89,12 +92,13 @@ WezTerm reports for native and remote-aware shells.
 
 ## Follow modes
 
-- **Follow** expands every ancestor from the workspace root to the focused
-  pane's CWD and highlights the active directory.
-- **Project Follow** expands to the detected Git project boundary while keeping
-  the active context visible without continually opening every deeper folder.
-- **Locked** updates pane status but does not change expansion state.
-- **Reveal Active** performs an explicit reveal using the current mode.
+- **Follow** makes the focused pane's CWD the sole visible explorer root. Only
+  that folder's contents are shown.
+- **Project Follow** makes the detected Git project the sole visible root and
+  reveals the focused CWD within it.
+- **Locked** holds the current visible root and expansion state while terminal
+  CWD changes continue.
+- **Reveal Active** explicitly switches a Locked view to the focused CWD.
 
 ## Persistence
 
