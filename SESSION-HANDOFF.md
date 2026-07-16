@@ -19,6 +19,13 @@ explorer and using independent application/runtime identities.
 - The explorer renders and remains resizable beside normal terminal content.
 - The explorer now follows Code OSS Dark Modern layout and color metrics with
   proportional Helvetica labels and native vector controls/icons.
+- The workbench now has a 48 px Activity Bar, 420 px default explorer, 44 px
+  title, 28 px rows, 14 pt UI/terminal text, and a 100 × 32 initial terminal.
+- The explorer is permanently visible. `Command+Shift+E` is an inert `Nop`,
+  and the Activity Bar icon focuses rather than hides the sidebar.
+- Follow state is a labeled header control. With explorer focus, `L` visibly
+  toggles Follow ↔ Locked; clicking a terminal pane reliably returns keyboard
+  focus so `.` and Return cannot leak into explorer actions.
 - In Follow mode, native `cd` changes make the new CWD the sole visible root;
   parent and sibling folders are excluded. Project Follow scopes to the Git
   root, while Locked holds the displayed root.

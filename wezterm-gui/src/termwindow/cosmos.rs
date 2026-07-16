@@ -30,28 +30,60 @@ use unicode_width::UnicodeWidthStr;
 
 const DIVIDER_WIDTH: usize = 1;
 const DIVIDER_HIT_WIDTH: usize = 7;
-const TITLE_HEIGHT: usize = 35;
-const ROW_HEIGHT: usize = 22;
-const TITLE_LEFT: usize = 20;
-const TREE_LEFT: usize = 8;
-const TREE_INDENT: usize = 8;
-const ICON_SIZE: usize = 16;
-const ACTION_SIZE: usize = 22;
+const ACTIVITY_BAR_WIDTH: usize = 48;
+const ACTIVITY_ICON_SIZE: usize = 24;
+const TITLE_HEIGHT: usize = 44;
+const ROW_HEIGHT: usize = 28;
+const TITLE_LEFT: usize = 18;
+const TREE_LEFT: usize = 10;
+const TREE_INDENT: usize = 12;
+const ICON_SIZE: usize = 18;
+const ACTION_SIZE: usize = 26;
+const MODE_ACTION_WIDTH: usize = 82;
 const VIRTUAL_ROOT_INDEX: usize = usize::MAX;
 const CONTEXT_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const DIRECTORY_REFRESH_INTERVAL: Duration = Duration::from_secs(2);
 
 const SIDEBAR_BG: RgbColor = RgbColor::new_8bpc(24, 24, 24);
+const ACTIVITY_BAR_BG: RgbColor = RgbColor::new_8bpc(24, 24, 24);
 const DIVIDER: RgbColor = RgbColor::new_8bpc(43, 43, 43);
 const TEXT: RgbColor = RgbColor::new_8bpc(204, 204, 204);
 const MUTED: RgbColor = RgbColor::new_8bpc(157, 157, 157);
 const ICON: RgbColor = RgbColor::new_8bpc(200, 200, 200);
 const INDENT_GUIDE: RgbColor = RgbColor::new_8bpc(50, 50, 50);
 const HOVER_BG: RgbColor = RgbColor::new_8bpc(42, 45, 46);
+const MODE_BG: RgbColor = RgbColor::new_8bpc(45, 45, 45);
 const INACTIVE_SELECTION_BG: RgbColor = RgbColor::new_8bpc(55, 55, 61);
 const ACTIVE_SELECTION_BG: RgbColor = RgbColor::new_8bpc(4, 57, 94);
 const ACCENT: RgbColor = RgbColor::new_8bpc(0, 120, 212);
 const ERROR: RgbColor = RgbColor::new_8bpc(248, 128, 112);
+
+const ACTIVITY_FILES_ICON: &[Poly] = &[
+    Poly {
+        path: &[
+            PolyCommand::MoveTo(BlockCoord::Frac(1, 8), BlockCoord::Frac(1, 8)),
+            PolyCommand::LineTo(BlockCoord::Frac(5, 8), BlockCoord::Frac(1, 8)),
+            PolyCommand::LineTo(BlockCoord::Frac(6, 8), BlockCoord::Frac(2, 8)),
+            PolyCommand::LineTo(BlockCoord::Frac(6, 8), BlockCoord::Frac(6, 8)),
+            PolyCommand::LineTo(BlockCoord::Frac(1, 8), BlockCoord::Frac(6, 8)),
+            PolyCommand::Close,
+        ],
+        intensity: BlockAlpha::Full,
+        style: PolyStyle::OutlineThin,
+    },
+    Poly {
+        path: &[
+            PolyCommand::MoveTo(BlockCoord::Frac(3, 8), BlockCoord::Frac(3, 8)),
+            PolyCommand::LineTo(BlockCoord::Frac(6, 8), BlockCoord::Frac(3, 8)),
+            PolyCommand::LineTo(BlockCoord::Frac(7, 8), BlockCoord::Frac(4, 8)),
+            PolyCommand::LineTo(BlockCoord::Frac(7, 8), BlockCoord::Frac(7, 8)),
+            PolyCommand::LineTo(BlockCoord::Frac(3, 8), BlockCoord::Frac(7, 8)),
+            PolyCommand::Close,
+        ],
+        intensity: BlockAlpha::Full,
+        style: PolyStyle::OutlineThin,
+    },
+];
 
 const CHEVRON_RIGHT: &[Poly] = &[Poly {
     path: &[
@@ -157,19 +189,6 @@ const REVEAL_ICON: &[Poly] = &[
     },
 ];
 
-const FOLLOW_ICON: &[Poly] = &[Poly {
-    path: &[
-        PolyCommand::MoveTo(BlockCoord::Frac(1, 8), BlockCoord::Frac(3, 8)),
-        PolyCommand::LineTo(BlockCoord::Frac(6, 8), BlockCoord::Frac(3, 8)),
-        PolyCommand::LineTo(BlockCoord::Frac(5, 8), BlockCoord::Frac(2, 8)),
-        PolyCommand::MoveTo(BlockCoord::Frac(7, 8), BlockCoord::Frac(5, 8)),
-        PolyCommand::LineTo(BlockCoord::Frac(2, 8), BlockCoord::Frac(5, 8)),
-        PolyCommand::LineTo(BlockCoord::Frac(3, 8), BlockCoord::Frac(6, 8)),
-    ],
-    intensity: BlockAlpha::Full,
-    style: PolyStyle::OutlineThin,
-}];
-
 const HIDDEN_ICON: &[Poly] = &[
     Poly {
         path: &[
@@ -206,6 +225,7 @@ pub enum ExplorerHeaderAction {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExplorerUiItem {
+    Activity,
     Surface,
     Divider,
     Header(ExplorerHeaderAction),
@@ -251,6 +271,9 @@ impl ExplorerUi {
                 Some(format!("Unable to load explorer state: {err}")),
             ),
         };
+        // The explorer is a permanent part of the Cosmos workbench. Keep the
+        // serialized field for state compatibility, but never restore hidden.
+        state.visible = true;
         let display_root = state.roots.first().cloned();
         if let Some(root) = &display_root {
             state.expanded.insert(root.path.clone());
@@ -282,11 +305,7 @@ impl ExplorerUi {
     }
 
     pub fn total_width(&self) -> usize {
-        if self.state.visible {
-            self.state.width_px + DIVIDER_WIDTH
-        } else {
-            0
-        }
+        self.state.width_px + DIVIDER_WIDTH
     }
 
     fn persist(&mut self) {
@@ -612,7 +631,7 @@ impl TermWindow {
     }
 
     pub fn schedule_explorer_tick(&mut self) {
-        if !self.explorer.state.visible || self.explorer.tick_scheduled {
+        if self.explorer.tick_scheduled {
             return;
         }
         let window = match self.window.as_ref() {
@@ -716,27 +735,14 @@ impl TermWindow {
     }
 
     pub fn toggle_explorer(&mut self) {
-        self.explorer.state.visible = !self.explorer.state.visible;
-        if !self.explorer.state.visible {
-            self.explorer.focused = false;
-            self.explorer.watched_directories.clear();
-            self.explorer.service.watch_directories(HashSet::new());
-        } else {
-            self.explorer.request_expanded_directories();
-        }
-        self.explorer.persist();
-        if let Some(window) = self.window.as_ref().cloned() {
-            let dimensions = self.dimensions;
-            self.apply_dimensions(&dimensions, None, &window);
-            window.invalidate();
-        }
-        self.schedule_explorer_tick();
+        // Retained for command/config compatibility. Cosmos now treats the
+        // explorer as a permanent workbench region, so the old toggle focuses
+        // it instead of hiding it.
+        self.focus_explorer();
     }
 
     pub fn focus_explorer(&mut self) {
-        if !self.explorer.state.visible {
-            self.toggle_explorer();
-        }
+        self.explorer.state.visible = true;
         self.explorer.focused = true;
         if self.explorer.selected_path.is_none() {
             self.explorer.selected_path = self
@@ -750,11 +756,35 @@ impl TermWindow {
         }
     }
 
+    pub fn blur_explorer(&mut self) {
+        if self.explorer.focused {
+            self.explorer.focused = false;
+            if let Some(window) = self.window.as_ref() {
+                window.invalidate();
+            }
+        }
+    }
+
     pub fn cycle_explorer_follow_mode(&mut self) {
         self.explorer.state.follow_mode = self.explorer.state.follow_mode.next();
         self.explorer.persist();
         if self.explorer.state.follow_mode != FollowMode::Locked {
             self.reveal_active_in_explorer();
+        }
+    }
+
+    pub fn toggle_explorer_lock(&mut self) {
+        let was_locked = self.explorer.state.follow_mode == FollowMode::Locked;
+        self.explorer.state.follow_mode = if was_locked {
+            FollowMode::Follow
+        } else {
+            FollowMode::Locked
+        };
+        self.explorer.persist();
+        if was_locked {
+            self.reveal_active_in_explorer();
+        } else if let Some(window) = self.window.as_ref() {
+            window.invalidate();
         }
     }
 
@@ -906,7 +936,7 @@ impl TermWindow {
     }
 
     pub fn explorer_key_down(&mut self, key: &KeyCode, modifiers: Modifiers) -> bool {
-        if !self.explorer.state.visible || !self.explorer.focused {
+        if !self.explorer.focused {
             return false;
         }
         let plain_modifiers = modifiers.remove_positional_mods();
@@ -944,10 +974,10 @@ impl TermWindow {
                 self.explorer.persist();
                 self.reveal_active_in_explorer();
             }
-            (KeyCode::Char('l'), Modifiers::NONE) => {
-                self.explorer.state.follow_mode = FollowMode::Locked;
-                self.explorer.persist();
-            }
+            (KeyCode::Char('l'), Modifiers::NONE)
+            | (KeyCode::Char('L'), Modifiers::NONE)
+            | (KeyCode::Char('l'), Modifiers::SHIFT)
+            | (KeyCode::Char('L'), Modifiers::SHIFT) => self.toggle_explorer_lock(),
             (KeyCode::Char('r'), Modifiers::NONE) => self.reveal_active_in_explorer(),
             (KeyCode::Char('.'), Modifiers::NONE) => self.toggle_explorer_hidden_files(),
             _ => return false,
@@ -1094,13 +1124,12 @@ impl TermWindow {
     }
 
     pub fn paint_explorer(&mut self, layers: &mut TripleLayerQuadAllocator) -> anyhow::Result<()> {
-        if !self.explorer.state.visible {
-            return Ok(());
-        }
         self.explorer.request_expanded_directories();
 
         let border = self.get_os_border();
         let width = self.explorer.state.width_px;
+        let panel_left = ACTIVITY_BAR_WIDTH;
+        let panel_width = width.saturating_sub(panel_left);
         let top = border.top.get();
         let bottom = self
             .dimensions
@@ -1120,6 +1149,28 @@ impl TermWindow {
         )?;
         self.filled_rectangle(
             layers,
+            0,
+            euclid::rect(
+                0.,
+                top as f32,
+                ACTIVITY_BAR_WIDTH as f32,
+                (bottom - top) as f32,
+            ),
+            ACTIVITY_BAR_BG.to_linear_tuple_rgba(),
+        )?;
+        self.filled_rectangle(
+            layers,
+            2,
+            euclid::rect(
+                ACTIVITY_BAR_WIDTH.saturating_sub(1) as f32,
+                top as f32,
+                1.,
+                (bottom - top) as f32,
+            ),
+            DIVIDER.to_linear_tuple_rgba(),
+        )?;
+        self.filled_rectangle(
+            layers,
             2,
             euclid::rect(
                 width as f32,
@@ -1130,32 +1181,122 @@ impl TermWindow {
             DIVIDER.to_linear_tuple_rgba(),
         )?;
         self.ui_items.push(UIItem {
-            x: 0,
+            x: panel_left,
             y: top,
-            width,
+            width: panel_width,
             height: bottom - top,
             item_type: UIItemType::Explorer(ExplorerUiItem::Surface),
         });
 
-        let actions: [(ExplorerHeaderAction, &'static [Poly]); 4] = [
+        let activity_hovered = self.explorer_item_hovered(ExplorerUiItem::Activity);
+        if activity_hovered {
+            self.filled_rectangle(
+                layers,
+                0,
+                euclid::rect(
+                    0.,
+                    top as f32,
+                    ACTIVITY_BAR_WIDTH as f32,
+                    ACTIVITY_BAR_WIDTH as f32,
+                ),
+                HOVER_BG.to_linear_tuple_rgba(),
+            )?;
+        }
+        self.filled_rectangle(
+            layers,
+            2,
+            euclid::rect(0., top as f32, 2., ACTIVITY_BAR_WIDTH as f32),
+            ACCENT.to_linear_tuple_rgba(),
+        )?;
+        self.draw_explorer_icon(
+            layers,
+            ACTIVITY_FILES_ICON,
+            (ACTIVITY_BAR_WIDTH - ACTIVITY_ICON_SIZE) / 2,
+            top + (ACTIVITY_BAR_WIDTH - ACTIVITY_ICON_SIZE) / 2,
+            ACTIVITY_ICON_SIZE,
+            TEXT,
+        )?;
+        self.ui_items.push(UIItem {
+            x: 0,
+            y: top,
+            width: ACTIVITY_BAR_WIDTH,
+            height: ACTIVITY_BAR_WIDTH,
+            item_type: UIItemType::Explorer(ExplorerUiItem::Activity),
+        });
+
+        let actions: [(ExplorerHeaderAction, &'static [Poly]); 3] = [
             (ExplorerHeaderAction::AddRoot, ADD_ROOT_ICON),
             (ExplorerHeaderAction::Reveal, REVEAL_ICON),
-            (ExplorerHeaderAction::CycleFollowMode, FOLLOW_ICON),
             (ExplorerHeaderAction::ToggleHidden, HIDDEN_ICON),
         ];
-        let actions_left = width.saturating_sub(actions.len() * ACTION_SIZE + 4);
-        let header_text_width = actions_left.saturating_sub(TITLE_LEFT + 4);
+        let actions_left = width.saturating_sub(actions.len() * ACTION_SIZE + 8);
+        let mode_x = actions_left.saturating_sub(MODE_ACTION_WIDTH + 8);
+        let header_text_left = panel_left + TITLE_LEFT;
+        let header_text_width = mode_x.saturating_sub(header_text_left + 8);
         self.render_explorer_line(
             layers,
             "EXPLORER",
             top as f32,
-            TITLE_LEFT as f32,
+            header_text_left as f32,
             header_text_width as f32,
             TITLE_HEIGHT as f32,
             TEXT,
             SIDEBAR_BG,
             false,
         )?;
+
+        let mode_y = top + (TITLE_HEIGHT - ACTION_SIZE) / 2;
+        let mode_hovered = self.explorer_item_hovered(ExplorerUiItem::Header(
+            ExplorerHeaderAction::CycleFollowMode,
+        ));
+        self.filled_rectangle(
+            layers,
+            0,
+            euclid::rect(
+                mode_x as f32,
+                mode_y as f32,
+                MODE_ACTION_WIDTH as f32,
+                ACTION_SIZE as f32,
+            ),
+            (if mode_hovered { HOVER_BG } else { MODE_BG }).to_linear_tuple_rgba(),
+        )?;
+        if self.explorer.state.follow_mode == FollowMode::Locked {
+            self.filled_rectangle(
+                layers,
+                2,
+                euclid::rect(
+                    mode_x as f32,
+                    (mode_y + ACTION_SIZE - 2) as f32,
+                    MODE_ACTION_WIDTH as f32,
+                    2.,
+                ),
+                ACCENT.to_linear_tuple_rgba(),
+            )?;
+        }
+        self.render_explorer_line(
+            layers,
+            self.explorer.state.follow_mode.label(),
+            mode_y as f32,
+            (mode_x + 10) as f32,
+            MODE_ACTION_WIDTH.saturating_sub(20) as f32,
+            ACTION_SIZE as f32,
+            if self.explorer.state.follow_mode == FollowMode::Locked {
+                TEXT
+            } else {
+                MUTED
+            },
+            MODE_BG,
+            true,
+        )?;
+        self.ui_items.push(UIItem {
+            x: mode_x,
+            y: mode_y,
+            width: MODE_ACTION_WIDTH,
+            height: ACTION_SIZE,
+            item_type: UIItemType::Explorer(ExplorerUiItem::Header(
+                ExplorerHeaderAction::CycleFollowMode,
+            )),
+        });
 
         for (offset, (action, icon)) in actions.iter().enumerate() {
             let x = actions_left + offset * ACTION_SIZE;
@@ -1176,16 +1317,6 @@ impl TermWindow {
                 item_type: UIItemType::Explorer(ExplorerUiItem::Header(*action)),
             });
             let color = match action {
-                ExplorerHeaderAction::CycleFollowMode
-                    if self.explorer.state.follow_mode == FollowMode::Locked =>
-                {
-                    ACCENT
-                }
-                ExplorerHeaderAction::CycleFollowMode
-                    if self.explorer.state.follow_mode == FollowMode::ProjectFollow =>
-                {
-                    TEXT
-                }
                 ExplorerHeaderAction::ToggleHidden if self.explorer.state.show_hidden => ACCENT,
                 _ => MUTED,
             };
@@ -1228,7 +1359,12 @@ impl TermWindow {
                 self.filled_rectangle(
                     layers,
                     0,
-                    euclid::rect(0., y as f32, width as f32, ROW_HEIGHT as f32),
+                    euclid::rect(
+                        panel_left as f32,
+                        y as f32,
+                        panel_width as f32,
+                        ROW_HEIGHT as f32,
+                    ),
                     background.to_linear_tuple_rgba(),
                 )?;
             }
@@ -1237,7 +1373,12 @@ impl TermWindow {
                 self.filled_rectangle(
                     layers,
                     0,
-                    euclid::rect(0., (y + ROW_HEIGHT - 1) as f32, width as f32, 1.),
+                    euclid::rect(
+                        panel_left as f32,
+                        (y + ROW_HEIGHT - 1) as f32,
+                        panel_width as f32,
+                        1.,
+                    ),
                     DIVIDER.to_linear_tuple_rgba(),
                 )?;
                 self.draw_explorer_icon(
@@ -1247,18 +1388,19 @@ impl TermWindow {
                     } else {
                         CHEVRON_RIGHT
                     },
-                    2,
+                    panel_left + 4,
                     y + (ROW_HEIGHT - ICON_SIZE) / 2,
                     ICON_SIZE,
                     TEXT,
                 )?;
-                let max_cells = width.saturating_sub(26) / 7;
+                let root_text_left = panel_left + 30;
+                let max_cells = width.saturating_sub(root_text_left + 8) / 8;
                 self.render_explorer_line(
                     layers,
                     &truncate_to_width(&row.label.to_uppercase(), max_cells),
                     y as f32,
-                    22.,
-                    width.saturating_sub(26) as f32,
+                    root_text_left as f32,
+                    width.saturating_sub(root_text_left + 8) as f32,
                     ROW_HEIGHT as f32,
                     TEXT,
                     background,
@@ -1266,8 +1408,9 @@ impl TermWindow {
                 )?;
             } else {
                 let depth = row.depth.saturating_sub(1);
+                let tree_left = panel_left + TREE_LEFT;
                 for guide in 0..depth {
-                    let guide_x = TREE_LEFT + ICON_SIZE / 2 + guide * TREE_INDENT;
+                    let guide_x = tree_left + ICON_SIZE / 2 + guide * TREE_INDENT;
                     self.filled_rectangle(
                         layers,
                         0,
@@ -1276,7 +1419,7 @@ impl TermWindow {
                     )?;
                 }
 
-                let twistie_x = TREE_LEFT + depth * TREE_INDENT;
+                let twistie_x = tree_left + depth * TREE_INDENT;
                 let icon_x = twistie_x + ICON_SIZE;
                 let icon_y = y + (ROW_HEIGHT - ICON_SIZE) / 2;
                 if matches!(row.kind, ExplorerRowKind::Directory) {
@@ -1304,7 +1447,7 @@ impl TermWindow {
                     _ if is_selected => RgbColor::new_8bpc(255, 255, 255),
                     _ => TEXT,
                 };
-                let max_cells = width.saturating_sub(text_left + 6) / 7;
+                let max_cells = width.saturating_sub(text_left + 8) / 8;
                 self.render_explorer_line(
                     layers,
                     &truncate_to_width(&row.label, max_cells),
@@ -1318,9 +1461,9 @@ impl TermWindow {
                 )?;
             }
             self.ui_items.push(UIItem {
-                x: 0,
+                x: panel_left,
                 y,
-                width,
+                width: panel_width,
                 height: ROW_HEIGHT,
                 item_type: UIItemType::Explorer(ExplorerUiItem::Row(row_index)),
             });
@@ -1380,6 +1523,13 @@ impl TermWindow {
         context: &dyn WindowOps,
     ) {
         match item {
+            ExplorerUiItem::Activity => {
+                context.set_cursor(Some(MouseCursor::Hand));
+                if event.kind == MouseEventKind::Press(MousePress::Left) {
+                    self.focus_explorer();
+                    context.invalidate();
+                }
+            }
             ExplorerUiItem::Divider => {
                 context.set_cursor(Some(MouseCursor::SizeLeftRight));
                 if event.kind == MouseEventKind::Press(MousePress::Left) {

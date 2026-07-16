@@ -8,9 +8,10 @@ use std::process::Command;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::SystemTime;
 
-pub const DEFAULT_SIDEBAR_WIDTH: usize = 300;
-pub const MIN_SIDEBAR_WIDTH: usize = 190;
-pub const MAX_SIDEBAR_WIDTH: usize = 720;
+const LEGACY_DEFAULT_SIDEBAR_WIDTH: usize = 300;
+pub const DEFAULT_SIDEBAR_WIDTH: usize = 420;
+pub const MIN_SIDEBAR_WIDTH: usize = 320;
+pub const MAX_SIDEBAR_WIDTH: usize = 840;
 pub const MAX_DIRECTORY_ENTRIES: usize = 5_000;
 
 fn default_true() -> bool {
@@ -108,6 +109,9 @@ impl ExplorerState {
         };
         let mut state: Self = serde_json::from_slice(&data)
             .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+        if state.width_px == LEGACY_DEFAULT_SIDEBAR_WIDTH {
+            state.width_px = DEFAULT_SIDEBAR_WIDTH;
+        }
         state.width_px = state.width_px.clamp(MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH);
         state.deduplicate_roots();
         Ok(state)
@@ -807,6 +811,20 @@ mod tests {
         state.add_root(PathBuf::from("/projects/cosmos"));
         state.save(&path).unwrap();
         assert_eq!(ExplorerState::load(&path).unwrap(), state);
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn legacy_default_sidebar_width_migrates_to_roomier_layout() {
+        let path = temporary_path("legacy-width").join("state.json");
+        let mut state = ExplorerState::default();
+        state.width_px = LEGACY_DEFAULT_SIDEBAR_WIDTH;
+        state.save(&path).unwrap();
+
+        assert_eq!(
+            ExplorerState::load(&path).unwrap().width_px,
+            DEFAULT_SIDEBAR_WIDTH
+        );
         let _ = fs::remove_dir_all(path.parent().unwrap());
     }
 

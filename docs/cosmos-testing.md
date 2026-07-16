@@ -11,8 +11,8 @@ git diff --check
 ```
 
 The workspace tests cover follow expansion, Locked behavior, root matching and
-deduplication, folder-scoped row isolation, directory sorting/filtering,
-persistence, and process detection.
+deduplication, folder-scoped row isolation, sidebar-width migration, directory
+sorting/filtering, persistence, and process detection.
 
 ## Release bundle
 
@@ -42,8 +42,9 @@ env \
   "dist/Cosmos Term.app/Contents/MacOS/cosmos-term" show-keys
 ```
 
-The command must load the bundled Cosmos config and list
-`ToggleFileExplorer`. It must not require or connect to WezTerm.
+The command must load the bundled Cosmos config, list `Command+Shift+E` as
+`Nop`, and contain no key assignment that hides the explorer. It must not
+require or connect to WezTerm.
 
 When Cosmos is launched from inside an existing WezTerm/tmux pane, inspect the
 new Cosmos shell:
@@ -74,6 +75,12 @@ Use only panes created in Cosmos Term.
 7. Open a selected directory in a tab and a split.
 8. Use an invalid or inaccessible root and confirm an inline error without a
    crash or blocked terminal.
+9. Focus the Activity Bar and press `L` twice. Confirm the labeled mode changes
+   Follow → Locked → Follow.
+10. Click the terminal, type a command containing `.` and press Return. Confirm
+    the command reaches the shell and no explorer action runs.
+11. Press `Command+Shift+E` and confirm the sidebar remains visible and no `E`
+    reaches the shell.
 
 ## Isolated tmux matrix
 

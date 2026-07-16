@@ -41,8 +41,9 @@ The native window adapter owns:
 
 - persisted `ExplorerUi` state
 - active-pane polling and context application
-- Code OSS-inspired sidebar title, section header, proportional row text,
-  vector controls, list highlights, and inline errors
+- Code OSS-inspired Activity Bar, primary-sidebar title, section header,
+  explicit mode control, proportional row text, vector controls, list
+  highlights, and inline errors
 - mouse hit targets, scrolling, divider drag, and row activation
 - keyboard navigation and root prompts
 - spawning selected directories into tabs or splits
@@ -57,8 +58,10 @@ The surrounding changes are intentionally limited to:
 
 - constructing and polling the explorer from `TermWindow`
 - offsetting render/layout coordinates
-- routing explorer mouse and keyboard events
-- defining menu/command-palette actions and the default toggle key
+- routing explorer mouse and keyboard events, including explicit focus return
+  when a terminal pane is clicked
+- defining menu/command-palette actions while consuming the retired sidebar
+  toggle chord
 - standalone app/config/runtime identity
 - modern compiler and macOS SDK compatibility
 
@@ -108,9 +111,10 @@ Explorer state is stored atomically as JSON at:
 ~/Library/Application Support/cosmos-term/workspace-state.json
 ```
 
-The file contains sidebar visibility and width, roots and labels, expanded
-directories, follow mode, and hidden-file preference. Cached listings and pane
-context are intentionally transient.
+The file contains sidebar width, roots and labels, expanded directories,
+follow mode, and hidden-file preference. A legacy visibility field is retained
+for state compatibility but ignored because the explorer is now a permanent
+workbench region. Cached listings and pane context are intentionally transient.
 
 ## Isolation
 

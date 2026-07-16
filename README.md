@@ -14,9 +14,12 @@ was installed when this fork was created.
 
 ## V1
 
-- Native, resizable, toggleable explorer beside terminal tabs and splits
-- Code OSS Dark Modern explorer styling with proportional UI text, 22 px tree
-  rows, and native vector tree/file/folder controls
+- Native, persistent, resizable explorer beside terminal tabs and splits
+- Code OSS Dark Modern workbench styling with a 48 px Activity Bar,
+  proportional UI text, 28 px tree rows, an explicit follow-mode control,
+  and native vector tree/file/folder controls
+- Roomier defaults: a 420 px explorer, 14 pt text, and a 100 × 32 terminal
+  viewport
 - Folder-scoped Follow mode: the focused pane's working directory is the only
   visible root, so parent and sibling folders are not shown
 - tmux-aware reveal based on the selected tmux pane, including pane changes
@@ -25,8 +28,8 @@ was installed when this fork was created.
 - Lazy directory loading and live non-recursive filesystem watching
 - Add, remove, rename, expand, collapse, and reorder root interactions
 - New terminal tab or split from a selected directory
-- Persistent sidebar visibility, width, roots, expansion, follow mode, and
-  hidden-file preference
+- Persistent sidebar width, roots, expansion, follow mode, and hidden-file
+  preference
 - Non-destructive inline errors for inaccessible or invalid paths
 
 Cosmos Term is the terminal application itself—not a wrapper around WezTerm
@@ -34,11 +37,12 @@ and not an editor embedding a terminal.
 
 ## Explorer controls
 
-Press `Command+Shift+E` to show or hide the explorer. The header buttons are:
+The explorer is always visible. Its Activity Bar icon focuses it, and the
+legacy `Command+Shift+E` chord is intentionally inert. The header controls are:
 
+- labeled `FOLLOW` / `PROJECT` / `LOCKED`: cycle the follow mode
 - folder-plus: add a workspace root and lock the view to it
 - target: reveal the active pane
-- opposing arrows: cycle Follow → Project Follow → Locked
 - eye: hide or show dotfiles
 
 Click a row to select and expand/collapse it. Double-click a directory to open
@@ -54,15 +58,17 @@ When the explorer has keyboard focus:
 | `Command+Return` | Open directory in a new tab |
 | `Shift+Return` | Open directory in a split |
 | `A` | Add a root |
-| `F` / `P` / `L` | Select Follow, Project Follow, or Locked |
+| `F` / `P` | Select Follow or Project Follow |
+| `L` | Toggle between Follow and Locked |
 | `R` | Reveal the active pane |
 | `.` | Toggle hidden files |
 | `F2` | Rename the selected root label |
 | `Delete` | Remove the selected root without deleting files |
 | `Escape` | Return focus to the terminal |
 
-All explorer actions are also available through the command palette and the
-View menu.
+Explorer actions are also available through the command palette and View
+menu. Clicking a terminal pane immediately returns keyboard focus to the
+terminal.
 
 `Command+W` closes the current tab immediately. `Command+Q` keeps the
 protected whole-application autosave flow.

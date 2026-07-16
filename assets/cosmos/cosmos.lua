@@ -14,6 +14,14 @@ local close_lock_command = {
   '--gui',
 }
 
+-- Cosmos is a terminal workbench rather than a compact terminal window. These
+-- defaults leave enough room for the persistent explorer and make both the
+-- terminal and native sidebar labels comfortable to scan.
+config.font_size = 14.0
+config.line_height = 1.08
+config.initial_cols = 100
+config.initial_rows = 32
+
 local function protected_save_then(action)
   return wezterm.action_callback(function(window, pane)
     local unlocked, _, unlock_error = wezterm.run_child_process(close_lock_command)
@@ -58,6 +66,13 @@ config.keys = {
     key = 'w',
     mods = 'SUPER',
     action = act.CloseCurrentTab { confirm = false },
+  },
+  {
+    -- The explorer is a permanent workbench region. Consume the legacy
+    -- toggle chord so it cannot hide the sidebar or leak an "E" to the shell.
+    key = 'e',
+    mods = 'SUPER|SHIFT',
+    action = act.Nop,
   },
   {
     key = 'q',

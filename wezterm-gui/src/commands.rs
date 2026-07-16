@@ -687,11 +687,11 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             icon: Some("md_fullscreen"),
         },
         ToggleFileExplorer => CommandDef {
-            brief: "Toggle Cosmos file explorer".into(),
-            doc: "Shows or hides the pane-aware filesystem explorer".into(),
-            keys: vec![(Modifiers::SUPER.union(Modifiers::SHIFT), "e".into())],
+            brief: "Focus Cosmos file explorer".into(),
+            doc: "Focuses the persistent pane-aware filesystem explorer".into(),
+            keys: vec![],
             args: &[ArgType::ActiveWindow],
-            menubar: &["View"],
+            menubar: &[],
             icon: Some("cod_files"),
         },
         FocusFileExplorer => CommandDef {
