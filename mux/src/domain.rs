@@ -375,7 +375,8 @@ impl LocalDomain {
 
             let is_default_prog = cmd.is_default_prog();
 
-            // Note: WEZTERM_UNIX_SOCKET, WEZTERM_CONFIG_(FILE|DIR) and other env
+            // Note: COSMOS_TERM_UNIX_SOCKET, COSMOS_TERM_CONFIG_(FILE|DIR)
+            // and other environment variables are inherited from the GUI.
             // vars are not included in this.
             // We can't include them: their paths are only meaningful in the sandbox
             // and cannot be reasonably accessed from outside it in the shell.
@@ -464,10 +465,10 @@ impl LocalDomain {
         if let Some(dir) = command_dir {
             cmd.cwd(dir);
         }
-        if let Ok(sock) = std::env::var("WEZTERM_UNIX_SOCKET") {
-            cmd.env("WEZTERM_UNIX_SOCKET", sock);
+        if let Ok(sock) = std::env::var("COSMOS_TERM_UNIX_SOCKET") {
+            cmd.env("COSMOS_TERM_UNIX_SOCKET", sock);
         }
-        cmd.env("WEZTERM_PANE", pane_id.to_string());
+        cmd.env("COSMOS_TERM_PANE", pane_id.to_string());
         self.fixup_command(&mut cmd).await?;
         Ok(cmd)
     }

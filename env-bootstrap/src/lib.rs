@@ -2,12 +2,28 @@ pub mod ringlog;
 pub use ringlog::setup_logger;
 use std::path::{Path, PathBuf};
 
-pub fn set_wezterm_executable() {
+const INHERITED_WEZTERM_ENV: &[&str] = &[
+    "WEZTERM_CONFIG_FILE",
+    "WEZTERM_CONFIG_DIR",
+    "WEZTERM_UNIX_SOCKET",
+    "WEZTERM_PANE",
+    "WEZTERM_EXECUTABLE",
+    "WEZTERM_EXECUTABLE_DIR",
+    "WEZTERM_LOG",
+];
+
+pub fn clear_inherited_wezterm_env() {
+    for name in INHERITED_WEZTERM_ENV {
+        std::env::remove_var(name);
+    }
+}
+
+pub fn set_cosmos_term_executable() {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            std::env::set_var("WEZTERM_EXECUTABLE_DIR", dir);
+            std::env::set_var("COSMOS_TERM_EXECUTABLE_DIR", dir);
         }
-        std::env::set_var("WEZTERM_EXECUTABLE", exe);
+        std::env::set_var("COSMOS_TERM_EXECUTABLE", exe);
     }
 }
 
@@ -52,9 +68,9 @@ pub fn fixup_appimage() {
 
         // Since our AppImage includes multiple utilities, we want to
         // be able to use them, so add that location to the PATH!
-        // WEZTERM_EXECUTABLE_DIR is set by `set_wezterm_executable`
+        // COSMOS_TERM_EXECUTABLE_DIR is set by `set_cosmos_term_executable`
         // which is called before `fixup_appimage`
-        if let Some(dir) = std::env::var_os("WEZTERM_EXECUTABLE_DIR") {
+        if let Some(dir) = std::env::var_os("COSMOS_TERM_EXECUTABLE_DIR") {
             if let Some(path) = std::env::var_os("PATH") {
                 let mut paths = std::env::split_paths(&path).collect::<Vec<_>>();
                 paths.insert(0, PathBuf::from(dir));
@@ -86,8 +102,8 @@ pub fn fixup_appimage() {
         /// However, if we are using the system wezterm to spawn a portable
         /// AppImage then we want these to not take effect.
         fn clean_wezterm_config_env() {
-            std::env::remove_var("WEZTERM_CONFIG_FILE");
-            std::env::remove_var("WEZTERM_CONFIG_DIR");
+            std::env::remove_var("COSMOS_TERM_CONFIG_FILE");
+            std::env::remove_var("COSMOS_TERM_CONFIG_DIR");
         }
 
         if config::HOME_DIR.starts_with(append_extra_file_name_suffix(&appimage, ".home")) {
@@ -212,6 +228,11 @@ fn register_lua_modules() {
 }
 
 pub fn bootstrap() {
+    // Cosmos Term is commonly launched from an existing terminal. Do not let
+    // a parent WezTerm's config or protocol variables cross the application
+    // boundary and target its live GUI or panes.
+    clear_inherited_wezterm_env();
+
     config::assign_version_info(
         wezterm_version::wezterm_version(),
         wezterm_version::wezterm_target_triple(),
@@ -219,7 +240,7 @@ pub fn bootstrap() {
     setup_logger();
     register_panic_hook();
 
-    set_wezterm_executable();
+    set_cosmos_term_executable();
 
     #[cfg(target_os = "macos")]
     set_lang_from_locale();

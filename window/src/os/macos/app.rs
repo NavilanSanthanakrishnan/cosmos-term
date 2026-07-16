@@ -27,8 +27,9 @@ extern "C" fn application_should_terminate(
             WindowCloseConfirmation::AlwaysPrompt => {
                 let alert: id = msg_send![class!(NSAlert), alloc];
                 let alert: id = msg_send![alert, init];
-                let message_text = nsstring("Terminate WezTerm?");
-                let info_text = nsstring("Detach and close all panes and terminate wezterm?");
+                let message_text = nsstring("Terminate Cosmos Term?");
+                let info_text =
+                    nsstring("Detach and close all panes and terminate Cosmos Term?");
                 let cancel = nsstring("Cancel");
                 let ok = nsstring("Ok");
 

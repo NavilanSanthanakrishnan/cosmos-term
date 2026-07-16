@@ -6,6 +6,15 @@ fn new_build() -> cc::Build {
     cfg.warnings(false);
     cfg.flag_if_supported("-fno-stack-check");
     cfg.flag_if_supported("-Wno-deprecated-non-prototype");
+    if env::var("TARGET")
+        .map(|target| target.contains("apple-darwin"))
+        .unwrap_or(false)
+    {
+        // Current Apple SDKs expose TARGET_OS_MAC while compiling ordinary
+        // macOS code. These old bundled libraries interpret that as classic
+        // Mac OS and select headers/macros that no longer exist.
+        cfg.flag("-UTARGET_OS_MAC");
+    }
     cfg
 }
 

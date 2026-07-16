@@ -353,11 +353,12 @@ impl crate::TermWindow {
             pixel_cell: self.render_metrics.cell_size.height as f32,
         };
 
-        let padding_left = self
-            .config
-            .window_padding
-            .left
-            .evaluate_as_pixels(h_context);
+        let padding_left = self.terminal_origin_x() as f32
+            + self
+                .config
+                .window_padding
+                .left
+                .evaluate_as_pixels(h_context);
         let padding_top = self.config.window_padding.top.evaluate_as_pixels(v_context);
 
         (padding_left, padding_top)

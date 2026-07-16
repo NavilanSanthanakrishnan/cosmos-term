@@ -956,9 +956,9 @@ impl Config {
         // multiple.  In addition, it spawns a lot of subprocesses,
         // so we do this bit "by-hand"
 
-        let mut paths = vec![PathPossibility::optional(HOME_DIR.join(".wezterm.lua"))];
+        let mut paths = vec![PathPossibility::optional(HOME_DIR.join(".cosmos-term.lua"))];
         for dir in CONFIG_DIRS.iter() {
-            paths.push(PathPossibility::optional(dir.join("wezterm.lua")))
+            paths.push(PathPossibility::optional(dir.join("cosmos.lua")))
         }
 
         if cfg!(windows) {
@@ -972,12 +972,20 @@ impl Config {
             // dir as the executable that will take precedence.
             if let Ok(exe_name) = std::env::current_exe() {
                 if let Some(exe_dir) = exe_name.parent() {
-                    paths.insert(0, PathPossibility::optional(exe_dir.join("wezterm.lua")));
+                    paths.insert(0, PathPossibility::optional(exe_dir.join("cosmos.lua")));
                 }
             }
         }
-        if let Some(path) = std::env::var_os("WEZTERM_CONFIG_FILE") {
-            log::trace!("Note: WEZTERM_CONFIG_FILE is set in the environment");
+        #[cfg(target_os = "macos")]
+        if let Ok(exe_name) = std::env::current_exe() {
+            if let Some(exe_dir) = exe_name.parent() {
+                paths.push(PathPossibility::optional(
+                    exe_dir.join("../Resources/cosmos.lua"),
+                ));
+            }
+        }
+        if let Some(path) = std::env::var_os("COSMOS_TERM_CONFIG_FILE") {
+            log::trace!("Note: COSMOS_TERM_CONFIG_FILE is set in the environment");
             paths.insert(0, PathPossibility::required(path.into()));
         }
 
@@ -1005,11 +1013,11 @@ impl Config {
             }
         }
 
-        // We didn't find (or were asked to skip) a wezterm.lua file, so
+        // We didn't find (or were asked to skip) a cosmos.lua file, so
         // update the environment to make it simpler to understand this
         // state.
-        std::env::remove_var("WEZTERM_CONFIG_FILE");
-        std::env::remove_var("WEZTERM_CONFIG_DIR");
+        std::env::remove_var("COSMOS_TERM_CONFIG_FILE");
+        std::env::remove_var("COSMOS_TERM_CONFIG_DIR");
 
         match Self::try_default() {
             Err(err) => LoadedConfig {
@@ -1080,9 +1088,9 @@ impl Config {
                 // problems earlier than we use them.
                 let _ = cfg.key_bindings();
 
-                std::env::set_var("WEZTERM_CONFIG_FILE", p);
+                std::env::set_var("COSMOS_TERM_CONFIG_FILE", p);
                 if let Some(dir) = p.parent() {
-                    std::env::set_var("WEZTERM_CONFIG_DIR", dir);
+                    std::env::set_var("COSMOS_TERM_CONFIG_DIR", dir);
                 }
                 Ok(cfg)
             });
@@ -1511,6 +1519,23 @@ impl Config {
         cmd.env_remove("APPIMAGE");
         cmd.env_remove("APPDIR");
         cmd.env_remove("OWD");
+        // A Cosmos GUI may itself have been launched from inside WezTerm or
+        // tmux. Keep the GUI's TMUX value available for pane-context queries,
+        // but don't make a fresh terminal shell look like it is already
+        // attached to that parent session.
+        for name in [
+            "WEZTERM_CONFIG_FILE",
+            "WEZTERM_CONFIG_DIR",
+            "WEZTERM_UNIX_SOCKET",
+            "WEZTERM_PANE",
+            "WEZTERM_EXECUTABLE",
+            "WEZTERM_EXECUTABLE_DIR",
+            "WEZTERM_LOG",
+            "TMUX",
+            "TMUX_PANE",
+        ] {
+            cmd.env_remove(name);
+        }
 
         for (k, v) in &self.set_environment_variables {
             if k == "WSLENV" {
@@ -1535,13 +1560,13 @@ impl Config {
         cmd.env("COLORTERM", "truecolor");
         // TERM_PROGRAM and TERM_PROGRAM_VERSION are an emerging
         // de-facto standard for identifying the terminal.
-        cmd.env("TERM_PROGRAM", "WezTerm");
+        cmd.env("TERM_PROGRAM", "CosmosTerm");
         cmd.env("TERM_PROGRAM_VERSION", crate::wezterm_version());
     }
 }
 
 fn default_check_for_updates() -> bool {
-    cfg!(not(feature = "distro-defaults"))
+    false
 }
 
 fn default_pane_select_fg_color() -> RgbaColor {
@@ -1663,18 +1688,22 @@ fn default_font_size() -> f64 {
 
 pub(crate) fn compute_data_dir() -> anyhow::Result<PathBuf> {
     if let Some(runtime) = dirs_next::data_dir() {
-        return Ok(runtime.join("wezterm"));
+        return Ok(runtime.join("cosmos-term"));
     }
 
-    Ok(crate::HOME_DIR.join(".local/share/wezterm"))
+    Ok(crate::HOME_DIR.join(".local/share/cosmos-term"))
 }
 
 pub(crate) fn compute_runtime_dir() -> anyhow::Result<PathBuf> {
     if let Some(runtime) = dirs_next::runtime_dir() {
-        return Ok(runtime.join("wezterm"));
+        return Ok(runtime.join("cosmos-term"));
     }
 
-    Ok(crate::HOME_DIR.join(".local/share/wezterm"))
+    if let Some(cache) = dirs_next::cache_dir() {
+        return Ok(cache.join("cosmos-term").join("runtime"));
+    }
+
+    Ok(crate::HOME_DIR.join(".cache/cosmos-term/runtime"))
 }
 
 pub fn pki_dir() -> anyhow::Result<PathBuf> {

@@ -41,6 +41,7 @@ clap = {version="4.0", features=["derive"]}
 codec = { path = "../codec" }
 colorgrad = "0.6"
 config = { path = "../config" }
+cosmos-workspace = { path = "../cosmos-workspace" }
 downcast-rs = "1.0"
 dhat = {version="0.3", optional=true}
 dirs-next = "2.0"

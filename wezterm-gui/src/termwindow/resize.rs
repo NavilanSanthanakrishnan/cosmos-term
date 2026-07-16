@@ -184,6 +184,7 @@ impl super::TermWindow {
 
             let pixel_width = (cols * self.render_metrics.cell_size.width as usize)
                 + (padding_left + padding_right)
+                + self.explorer_width()
                 + (border.left + border.right).get() as usize;
 
             let dims = Dimensions {
@@ -195,7 +196,7 @@ impl super::TermWindow {
             let ri_calc = ResizeIncrementCalculator {
                 x: self.render_metrics.cell_size.width as u16,
                 y: self.render_metrics.cell_size.height as u16,
-                padding_left: padding_left,
+                padding_left: padding_left + self.explorer_width(),
                 padding_top: padding_top,
                 padding_right: padding_right,
                 padding_bottom: padding_bottom,
@@ -225,6 +226,7 @@ impl super::TermWindow {
 
             let avail_width = dimensions.pixel_width.saturating_sub(
                 (padding_left + padding_right) as usize
+                    + self.explorer_width()
                     + (border.left + border.right).get() as usize,
             );
             let avail_height = dimensions
@@ -253,7 +255,7 @@ impl super::TermWindow {
             let ri_calc = ResizeIncrementCalculator {
                 x: self.render_metrics.cell_size.width as u16,
                 y: self.render_metrics.cell_size.height as u16,
-                padding_left: padding_left,
+                padding_left: padding_left + self.explorer_width(),
                 padding_top: padding_top,
                 padding_right: padding_right,
                 padding_bottom: padding_bottom,

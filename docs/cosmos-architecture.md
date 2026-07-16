@@ -1,0 +1,134 @@
+# Cosmos Term Architecture
+
+## Product boundary
+
+Cosmos Term is a direct WezTerm fork with a native left-side workspace
+explorer. The terminal engine remains WezTerm: PTYs, tabs, splits, mux domains,
+rendering, fonts, input handling, and Lua configuration continue to use the
+existing implementation. The explorer is composed into the same native window
+and render pipeline.
+
+V1 deliberately avoids becoming an editor, an Electron wrapper, or a separate
+process embedded beside the terminal.
+
+## Components
+
+### `cosmos-workspace`
+
+This crate owns UI-independent workspace behavior:
+
+- serializable explorer state and atomic persistence
+- workspace root add/remove/rename/reorder operations
+- Follow, Project Follow, and Locked expansion semantics
+- project-root discovery
+- lazy direct-directory listings and stable sorting
+- row generation for expanded directories
+- pane-context resolution for native panes and tmux
+- filesystem change notification
+
+Three independent worker threads serve directory reads, pane-context requests,
+and filesystem watches. Responses return through a single non-blocking channel
+consumed by the window. The render thread never recursively scans a workspace.
+
+Only expanded directories are watched, and watches are non-recursive. A
+periodic refresh provides a fallback if a platform watcher misses an event.
+Listings are capped at 5,000 visible entries per directory and report
+truncation inline.
+
+### `wezterm-gui/src/termwindow/cosmos.rs`
+
+The native window adapter owns:
+
+- persisted `ExplorerUi` state
+- active-pane polling and context application
+- render rows, header controls, status, highlights, and errors
+- mouse hit targets, scrolling, divider drag, and row activation
+- keyboard navigation and root prompts
+- spawning selected directories into tabs or splits
+
+The explorer width becomes a left origin offset for tab bars, panes, split
+backgrounds, and terminal rendering. Existing WezTerm widgets continue to use
+their normal layout inside the remaining viewport.
+
+### Narrow upstream integration
+
+The surrounding changes are intentionally limited to:
+
+- constructing and polling the explorer from `TermWindow`
+- offsetting render/layout coordinates
+- routing explorer mouse and keyboard events
+- defining menu/command-palette actions and the default toggle key
+- standalone app/config/runtime identity
+- modern compiler and macOS SDK compatibility
+
+## Pane following
+
+For a native pane, WezTerm's reported CWD is used. The explorer resolves the
+longest matching workspace root, discovers a containing Git project, and
+applies the selected follow mode.
+
+For tmux, the native terminal pane still reports the outer shell's CWD, so the
+foreground process and TTY are also inspected. When the foreground process is
+`tmux`, Cosmos Term runs:
+
+```sh
+tmux display-message -p -t <client-tty> "#{pane_current_path}"
+```
+
+The process inherits the GUI's `TMUX` environment and therefore queries the
+same server as the attached client. Cosmos invokes the foreground tmux
+process's full executable path when available, so a Finder-launched GUI does
+not depend on Homebrew being present in its reduced `PATH`. If the query
+fails, the explorer keeps the terminal usable, falls back to reported or
+last-known context, and displays the error in the sidebar.
+
+Context requests run approximately four times per second, independently from
+directory loading. This makes native focus and tmux pane changes visible
+without shell hooks. OSC 7 remains useful because it improves the CWD that
+WezTerm reports for native and remote-aware shells.
+
+## Follow modes
+
+- **Follow** expands every ancestor from the workspace root to the focused
+  pane's CWD and highlights the active directory.
+- **Project Follow** expands to the detected Git project boundary while keeping
+  the active context visible without continually opening every deeper folder.
+- **Locked** updates pane status but does not change expansion state.
+- **Reveal Active** performs an explicit reveal using the current mode.
+
+## Persistence
+
+Explorer state is stored atomically as JSON at:
+
+```text
+~/Library/Application Support/cosmos-term/workspace-state.json
+```
+
+The file contains sidebar visibility and width, roots and labels, expanded
+directories, follow mode, and hidden-file preference. Cached listings and pane
+context are intentionally transient.
+
+## Isolation
+
+Cosmos Term uses its own bundle ID, config names, data/cache directories,
+runtime socket variables, executable variables, logs, and companion binary
+names. It ignores WezTerm's config and socket variables so both applications
+can run simultaneously without sharing GUI or mux sessions.
+
+At bootstrap, inherited WezTerm config/protocol variables are removed. A
+GUI-level `TMUX` value may be retained so the pane resolver can query the
+server from which Cosmos was intentionally launched, but `TMUX`, `TMUX_PANE`,
+and all parent WezTerm protocol variables are removed from each newly spawned
+terminal command. This prevents a fresh Cosmos shell from masquerading as an
+attached pane in the parent terminal.
+
+The upstream updater is disabled because Cosmos Term artifacts are not WezTerm
+artifacts. Updating the fork is an explicit source/release process.
+
+## Compatibility notes
+
+The baseline predates the current Rust compiler and macOS SDK. Null-safe
+FreeType handling and the macOS full-screen constant adjustment are narrow
+backports from later upstream behavior. The package-specific `glium`
+optimization override is required to keep the baseline's default OpenGL
+renderer correct on the current LLVM toolchain.
