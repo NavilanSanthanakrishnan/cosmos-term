@@ -218,6 +218,15 @@ impl super::TermWindow {
             None
         };
 
+        if capture_mouse
+            && !matches!(
+                ui_item.as_ref().map(|item| &item.item_type),
+                Some(UIItemType::Explorer(_))
+            )
+        {
+            self.blur_explorer();
+        }
+
         if let Some(item) = ui_item.clone() {
             if capture_mouse {
                 self.current_mouse_capture = Some(MouseCapture::UI);

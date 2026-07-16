@@ -35,6 +35,13 @@
 - Normal tab close should remain independent from whole-application protection:
   bind `Command+W` directly to `CloseCurrentTab`, and reserve close-lock plus
   autosave for `Command+Q`.
+- Canvas-drawn explorer focus must be released explicitly when a terminal pane
+  is clicked. Native window focus alone does not identify which in-window
+  region owns keyboard events; without the handoff, `.` and Return can trigger
+  explorer actions while the user is typing a shell command.
+- A persistent sidebar should consume its retired toggle chord with `Nop`.
+  Merely removing the default assignment can forward the modified character to
+  the terminal on this baseline.
 - Current Rust requires null-safe FreeType bitmap and outline slice handling
   for this older upstream baseline. The fixes match later upstream WezTerm
   behavior.
