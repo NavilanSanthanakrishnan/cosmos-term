@@ -24,6 +24,17 @@
 - Explorer rendering shares WezTerm's quad layers. Surface, header, and row
   backgrounds must remain below text; placing those backgrounds on a later
   layer hides otherwise correctly shaped glyphs.
+- `render_screen_line` retains terminal-cell placement even when supplied a
+  proportional font. Native sidebar labels need box-model shaping and direct
+  glyph quad emission; Helvetica Neue is available through macOS CoreText.
+- Keep the active explorer display root transient and separate from persisted
+  multi-root state. Follow can then scope directly to the pane CWD without
+  adding every visited folder or exposing saved parents/siblings; Project
+  Follow and Locked can select different display-root policies over the same
+  cached listings.
+- Normal tab close should remain independent from whole-application protection:
+  bind `Command+W` directly to `CloseCurrentTab`, and reserve close-lock plus
+  autosave for `Command+Q`.
 - Current Rust requires null-safe FreeType bitmap and outline slice handling
   for this older upstream baseline. The fixes match later upstream WezTerm
   behavior.

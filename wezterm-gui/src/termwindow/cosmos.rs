@@ -1,47 +1,200 @@
 use super::{TermWindow, TermWindowNotif, UIItem, UIItemType};
-use crate::quad::TripleLayerQuadAllocator;
+use crate::customglyph::{BlockAlpha, BlockCoord, Poly, PolyCommand, PolyStyle};
+use crate::quad::{QuadTrait, TripleLayerQuadAllocator, TripleLayerQuadAllocatorTrait};
 use crate::spawn::SpawnWhere;
-use crate::termwindow::render::RenderScreenLineParams;
+use crate::termwindow::box_model::{Element, ElementCell, ElementContent, LayoutContext};
+use crate::utilsprites::RenderMetrics;
 use ::window::{
     KeyCode, Modifiers, MouseCursor, MouseEvent, MouseEventKind, MousePress, Window, WindowOps,
 };
 use config::keyassignment::{SpawnCommand, SpawnTabDomain};
+use config::{DimensionContext, FontAttributes, FontWeight, TextStyle};
 use cosmos_workspace::{
     ancestors_from_root, expand_home, DirectoryCache, ExplorerRow, ExplorerRowKind, ExplorerState,
-    FollowMode, PaneContext, PaneContextRequest, ServiceResponse, WorkspaceService,
+    FollowMode, PaneContext, PaneContextRequest, ServiceResponse, WorkspaceRoot, WorkspaceService,
     MAX_SIDEBAR_WIDTH, MIN_SIDEBAR_WIDTH,
 };
 use mux::pane::CachePolicy;
-use mux::renderable::{RenderableDimensions, StableCursorPosition};
 use mux::tab::{SplitDirection, SplitRequest, SplitSize};
 use mux::Mux;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use termwiz::cell::CellAttributes;
-use termwiz::color::{ColorSpec, RgbColor};
+use termwiz::color::RgbColor;
 use termwiz::input::{InputEvent, KeyCode as TermKeyCode, KeyEvent as TermKeyEvent};
 use termwiz::lineedit::{Action, BasicHistory, History, LineEditor, LineEditorHost};
-use termwiz::surface::{Change, Line, SEQ_ZERO};
+use termwiz::surface::Change;
 use termwiz::terminal::Terminal;
 use unicode_width::UnicodeWidthStr;
-use window::color::LinearRgba;
 
 const DIVIDER_WIDTH: usize = 1;
 const DIVIDER_HIT_WIDTH: usize = 7;
-const HORIZONTAL_PADDING: usize = 8;
+const TITLE_HEIGHT: usize = 35;
+const ROW_HEIGHT: usize = 22;
+const TITLE_LEFT: usize = 20;
+const TREE_LEFT: usize = 8;
+const TREE_INDENT: usize = 8;
+const ICON_SIZE: usize = 16;
+const ACTION_SIZE: usize = 22;
+const VIRTUAL_ROOT_INDEX: usize = usize::MAX;
 const CONTEXT_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const DIRECTORY_REFRESH_INTERVAL: Duration = Duration::from_secs(2);
 
 const SIDEBAR_BG: RgbColor = RgbColor::new_8bpc(24, 24, 24);
-const HEADER_BG: RgbColor = RgbColor::new_8bpc(31, 31, 31);
-const DIVIDER: RgbColor = RgbColor::new_8bpc(47, 47, 47);
+const DIVIDER: RgbColor = RgbColor::new_8bpc(43, 43, 43);
 const TEXT: RgbColor = RgbColor::new_8bpc(204, 204, 204);
-const MUTED: RgbColor = RgbColor::new_8bpc(133, 133, 133);
-const ACTIVE_BG: RgbColor = RgbColor::new_8bpc(55, 55, 61);
-const SELECTED_BG: RgbColor = RgbColor::new_8bpc(4, 57, 94);
-const ACCENT: RgbColor = RgbColor::new_8bpc(0, 122, 204);
-const ERROR: RgbColor = RgbColor::new_8bpc(244, 135, 113);
+const MUTED: RgbColor = RgbColor::new_8bpc(157, 157, 157);
+const ICON: RgbColor = RgbColor::new_8bpc(200, 200, 200);
+const INDENT_GUIDE: RgbColor = RgbColor::new_8bpc(50, 50, 50);
+const HOVER_BG: RgbColor = RgbColor::new_8bpc(42, 45, 46);
+const INACTIVE_SELECTION_BG: RgbColor = RgbColor::new_8bpc(55, 55, 61);
+const ACTIVE_SELECTION_BG: RgbColor = RgbColor::new_8bpc(4, 57, 94);
+const ACCENT: RgbColor = RgbColor::new_8bpc(0, 120, 212);
+const ERROR: RgbColor = RgbColor::new_8bpc(248, 128, 112);
+
+const CHEVRON_RIGHT: &[Poly] = &[Poly {
+    path: &[
+        PolyCommand::MoveTo(BlockCoord::Frac(3, 8), BlockCoord::Frac(2, 8)),
+        PolyCommand::LineTo(BlockCoord::Frac(5, 8), BlockCoord::Frac(4, 8)),
+        PolyCommand::LineTo(BlockCoord::Frac(3, 8), BlockCoord::Frac(6, 8)),
+    ],
+    intensity: BlockAlpha::Full,
+    style: PolyStyle::OutlineThin,
+}];
+
+const CHEVRON_DOWN: &[Poly] = &[Poly {
+    path: &[
+        PolyCommand::MoveTo(BlockCoord::Frac(2, 8), BlockCoord::Frac(3, 8)),
+        PolyCommand::LineTo(BlockCoord::Frac(4, 8), BlockCoord::Frac(5, 8)),
+        PolyCommand::LineTo(BlockCoord::Frac(6, 8), BlockCoord::Frac(3, 8)),
+    ],
+    intensity: BlockAlpha::Full,
+    style: PolyStyle::OutlineThin,
+}];
+
+const FOLDER_ICON: &[Poly] = &[Poly {
+    path: &[
+        PolyCommand::MoveTo(BlockCoord::Frac(1, 8), BlockCoord::Frac(2, 8)),
+        PolyCommand::LineTo(BlockCoord::Frac(3, 8), BlockCoord::Frac(2, 8)),
+        PolyCommand::LineTo(BlockCoord::Frac(4, 8), BlockCoord::Frac(3, 8)),
+        PolyCommand::LineTo(BlockCoord::Frac(7, 8), BlockCoord::Frac(3, 8)),
+        PolyCommand::LineTo(BlockCoord::Frac(7, 8), BlockCoord::Frac(7, 8)),
+        PolyCommand::LineTo(BlockCoord::Frac(1, 8), BlockCoord::Frac(7, 8)),
+        PolyCommand::Close,
+    ],
+    intensity: BlockAlpha::Full,
+    style: PolyStyle::OutlineThin,
+}];
+
+const FILE_ICON: &[Poly] = &[Poly {
+    path: &[
+        PolyCommand::MoveTo(BlockCoord::Frac(2, 8), BlockCoord::Frac(1, 8)),
+        PolyCommand::LineTo(BlockCoord::Frac(5, 8), BlockCoord::Frac(1, 8)),
+        PolyCommand::LineTo(BlockCoord::Frac(7, 8), BlockCoord::Frac(3, 8)),
+        PolyCommand::LineTo(BlockCoord::Frac(7, 8), BlockCoord::Frac(7, 8)),
+        PolyCommand::LineTo(BlockCoord::Frac(2, 8), BlockCoord::Frac(7, 8)),
+        PolyCommand::Close,
+        PolyCommand::MoveTo(BlockCoord::Frac(5, 8), BlockCoord::Frac(1, 8)),
+        PolyCommand::LineTo(BlockCoord::Frac(5, 8), BlockCoord::Frac(3, 8)),
+        PolyCommand::LineTo(BlockCoord::Frac(7, 8), BlockCoord::Frac(3, 8)),
+    ],
+    intensity: BlockAlpha::Full,
+    style: PolyStyle::OutlineThin,
+}];
+
+const ADD_ROOT_ICON: &[Poly] = &[
+    Poly {
+        path: &[
+            PolyCommand::MoveTo(BlockCoord::Frac(1, 8), BlockCoord::Frac(3, 8)),
+            PolyCommand::LineTo(BlockCoord::Frac(3, 8), BlockCoord::Frac(3, 8)),
+            PolyCommand::LineTo(BlockCoord::Frac(4, 8), BlockCoord::Frac(4, 8)),
+            PolyCommand::LineTo(BlockCoord::Frac(7, 8), BlockCoord::Frac(4, 8)),
+            PolyCommand::LineTo(BlockCoord::Frac(7, 8), BlockCoord::Frac(7, 8)),
+            PolyCommand::LineTo(BlockCoord::Frac(1, 8), BlockCoord::Frac(7, 8)),
+            PolyCommand::Close,
+        ],
+        intensity: BlockAlpha::Full,
+        style: PolyStyle::OutlineThin,
+    },
+    Poly {
+        path: &[
+            PolyCommand::MoveTo(BlockCoord::Frac(5, 8), BlockCoord::Frac(1, 8)),
+            PolyCommand::LineTo(BlockCoord::Frac(5, 8), BlockCoord::Frac(4, 8)),
+            PolyCommand::MoveTo(BlockCoord::Frac(3, 8), BlockCoord::Frac(2, 8)),
+            PolyCommand::LineTo(BlockCoord::Frac(7, 8), BlockCoord::Frac(2, 8)),
+        ],
+        intensity: BlockAlpha::Full,
+        style: PolyStyle::OutlineThin,
+    },
+];
+
+const REVEAL_ICON: &[Poly] = &[
+    Poly {
+        path: &[
+            PolyCommand::MoveTo(BlockCoord::Frac(4, 8), BlockCoord::Frac(1, 8)),
+            PolyCommand::LineTo(BlockCoord::Frac(4, 8), BlockCoord::Frac(3, 8)),
+            PolyCommand::MoveTo(BlockCoord::Frac(4, 8), BlockCoord::Frac(5, 8)),
+            PolyCommand::LineTo(BlockCoord::Frac(4, 8), BlockCoord::Frac(7, 8)),
+            PolyCommand::MoveTo(BlockCoord::Frac(1, 8), BlockCoord::Frac(4, 8)),
+            PolyCommand::LineTo(BlockCoord::Frac(3, 8), BlockCoord::Frac(4, 8)),
+            PolyCommand::MoveTo(BlockCoord::Frac(5, 8), BlockCoord::Frac(4, 8)),
+            PolyCommand::LineTo(BlockCoord::Frac(7, 8), BlockCoord::Frac(4, 8)),
+        ],
+        intensity: BlockAlpha::Full,
+        style: PolyStyle::OutlineThin,
+    },
+    Poly {
+        path: &[
+            PolyCommand::MoveTo(BlockCoord::Frac(3, 8), BlockCoord::Frac(3, 8)),
+            PolyCommand::LineTo(BlockCoord::Frac(5, 8), BlockCoord::Frac(3, 8)),
+            PolyCommand::LineTo(BlockCoord::Frac(5, 8), BlockCoord::Frac(5, 8)),
+            PolyCommand::LineTo(BlockCoord::Frac(3, 8), BlockCoord::Frac(5, 8)),
+            PolyCommand::Close,
+        ],
+        intensity: BlockAlpha::Full,
+        style: PolyStyle::OutlineThin,
+    },
+];
+
+const FOLLOW_ICON: &[Poly] = &[Poly {
+    path: &[
+        PolyCommand::MoveTo(BlockCoord::Frac(1, 8), BlockCoord::Frac(3, 8)),
+        PolyCommand::LineTo(BlockCoord::Frac(6, 8), BlockCoord::Frac(3, 8)),
+        PolyCommand::LineTo(BlockCoord::Frac(5, 8), BlockCoord::Frac(2, 8)),
+        PolyCommand::MoveTo(BlockCoord::Frac(7, 8), BlockCoord::Frac(5, 8)),
+        PolyCommand::LineTo(BlockCoord::Frac(2, 8), BlockCoord::Frac(5, 8)),
+        PolyCommand::LineTo(BlockCoord::Frac(3, 8), BlockCoord::Frac(6, 8)),
+    ],
+    intensity: BlockAlpha::Full,
+    style: PolyStyle::OutlineThin,
+}];
+
+const HIDDEN_ICON: &[Poly] = &[
+    Poly {
+        path: &[
+            PolyCommand::MoveTo(BlockCoord::Frac(1, 8), BlockCoord::Frac(4, 8)),
+            PolyCommand::QuadTo {
+                control: (BlockCoord::Frac(4, 8), BlockCoord::Frac(1, 8)),
+                to: (BlockCoord::Frac(7, 8), BlockCoord::Frac(4, 8)),
+            },
+            PolyCommand::QuadTo {
+                control: (BlockCoord::Frac(4, 8), BlockCoord::Frac(7, 8)),
+                to: (BlockCoord::Frac(1, 8), BlockCoord::Frac(4, 8)),
+            },
+        ],
+        intensity: BlockAlpha::Full,
+        style: PolyStyle::OutlineThin,
+    },
+    Poly {
+        path: &[
+            PolyCommand::MoveTo(BlockCoord::Frac(4, 8), BlockCoord::Frac(3, 8)),
+            PolyCommand::LineTo(BlockCoord::Frac(4, 8), BlockCoord::Frac(5, 8)),
+        ],
+        intensity: BlockAlpha::Full,
+        style: PolyStyle::Outline,
+    },
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExplorerHeaderAction {
@@ -78,6 +231,7 @@ pub struct ExplorerUi {
     selected_path: Option<PathBuf>,
     pub(super) selected_root: Option<usize>,
     active_context: Option<PaneContext>,
+    display_root: Option<WorkspaceRoot>,
     focused: bool,
     scroll: usize,
     context_request_in_flight: bool,
@@ -90,13 +244,17 @@ pub struct ExplorerUi {
 impl ExplorerUi {
     pub fn load() -> Self {
         let state_path = config::DATA_DIR.join("workspace-state.json");
-        let (state, last_error) = match ExplorerState::load(&state_path) {
+        let (mut state, last_error) = match ExplorerState::load(&state_path) {
             Ok(state) => (state, None),
             Err(err) => (
                 ExplorerState::default(),
                 Some(format!("Unable to load explorer state: {err}")),
             ),
         };
+        let display_root = state.roots.first().cloned();
+        if let Some(root) = &display_root {
+            state.expanded.insert(root.path.clone());
+        }
         Self {
             state,
             state_path,
@@ -110,6 +268,7 @@ impl ExplorerUi {
             selected_path: None,
             selected_root: None,
             active_context: None,
+            display_root,
             focused: false,
             scroll: 0,
             context_request_in_flight: false,
@@ -144,11 +303,18 @@ impl ExplorerUi {
     }
 
     fn request_expanded_directories(&mut self) {
+        let display_root = self.display_root.as_ref().map(|root| root.path.clone());
         let expanded = self
             .state
             .expanded
             .iter()
-            .filter(|path| path.is_dir())
+            .filter(|path| {
+                path.is_dir()
+                    && display_root
+                        .as_ref()
+                        .map(|root| path.as_path() == root || path.starts_with(root))
+                        .unwrap_or(true)
+            })
             .cloned()
             .collect::<HashSet<_>>();
         if expanded != self.watched_directories {
@@ -167,11 +333,11 @@ impl ExplorerUi {
     fn refresh_changed_paths(&mut self, paths: Vec<PathBuf>) {
         let mut directories = HashSet::new();
         for path in paths {
-            if self.state.expanded.contains(&path) {
+            if self.is_in_display_scope(&path) && self.state.expanded.contains(&path) {
                 directories.insert(path.clone());
             }
             if let Some(parent) = path.parent() {
-                if self.state.expanded.contains(parent) {
+                if self.is_in_display_scope(parent) && self.state.expanded.contains(parent) {
                     directories.insert(parent.to_path_buf());
                 }
             }
@@ -181,27 +347,78 @@ impl ExplorerUi {
         }
     }
 
+    fn is_in_display_scope(&self, path: &Path) -> bool {
+        self.display_root
+            .as_ref()
+            .map(|root| path == root.path || path.starts_with(&root.path))
+            .unwrap_or(true)
+    }
+
+    fn exact_root_index(&self, path: &Path) -> Option<usize> {
+        self.state.roots.iter().position(|root| root.path == path)
+    }
+
+    fn set_display_root(&mut self, path: PathBuf, ensure_expanded: bool) -> bool {
+        let root = self
+            .state
+            .roots
+            .iter()
+            .find(|root| root.path == path)
+            .cloned()
+            .unwrap_or_else(|| WorkspaceRoot::new(path.clone()));
+        let changed = self.display_root.as_ref() != Some(&root);
+        let expanded = (changed || ensure_expanded) && self.state.expanded.insert(path.clone());
+        self.display_root = Some(root);
+        if changed {
+            self.scroll = 0;
+            self.selected_path = Some(path.clone());
+        }
+        self.selected_root = self.exact_root_index(&path);
+        self.request_expanded_directories();
+        changed || expanded
+    }
+
     fn apply_context(&mut self, context: PaneContext, reveal_even_if_locked: bool) -> bool {
         self.context_request_in_flight = false;
         let prior = self.active_context.clone();
-        let mut changed = prior.as_ref() != Some(&context);
-        let active_path = context.cwd.clone();
+        let context_changed = prior.as_ref() != Some(&context);
+        let mut changed = context_changed;
         self.active_context = Some(context.clone());
 
-        if let Some(path) = active_path {
+        if let Some(cwd) = context.cwd.clone() {
             let prior_state = self.state.clone();
-            if reveal_even_if_locked && self.state.follow_mode == FollowMode::Locked {
-                let root_index = self.state.ensure_root_for_path(&path);
-                let root_path = self.state.roots[root_index].path.clone();
-                for ancestor in ancestors_from_root(&root_path, &path) {
-                    self.state.expanded.insert(ancestor);
+            let should_update_root = reveal_even_if_locked
+                || self.state.follow_mode != FollowMode::Locked
+                || self.display_root.is_none();
+            if should_update_root {
+                let root_path = match self.state.follow_mode {
+                    FollowMode::Follow | FollowMode::Locked => cwd.clone(),
+                    FollowMode::ProjectFollow => context
+                        .project_root
+                        .clone()
+                        .or(context.workspace_root.clone())
+                        .unwrap_or_else(|| cwd.clone()),
+                };
+                let root_changed = self.set_display_root(root_path.clone(), reveal_even_if_locked);
+                changed |= root_changed;
+
+                if self.state.follow_mode == FollowMode::ProjectFollow
+                    && cwd.starts_with(&root_path)
+                    && (root_changed || context_changed || reveal_even_if_locked)
+                {
+                    for ancestor in ancestors_from_root(&root_path, &cwd) {
+                        self.state.expanded.insert(ancestor);
+                    }
                 }
-            } else if self.state.follow_mode != FollowMode::Locked {
-                self.state
-                    .reveal_path(&path, context.project_root.as_deref());
+                if root_changed || !self.focused {
+                    self.selected_path =
+                        Some(if self.state.follow_mode == FollowMode::ProjectFollow {
+                            cwd.clone()
+                        } else {
+                            root_path
+                        });
+                }
             }
-            self.selected_path = Some(path.clone());
-            self.selected_root = self.state.matching_root(&path);
             self.request_expanded_directories();
             if self.state != prior_state {
                 self.persist();
@@ -216,18 +433,29 @@ impl ExplorerUi {
 
     fn active_highlight_path(&self) -> Option<&Path> {
         let context = self.active_context.as_ref()?;
-        match self.state.follow_mode {
-            FollowMode::Follow | FollowMode::Locked => context.cwd.as_deref(),
-            FollowMode::ProjectFollow => context
-                .project_root
-                .as_deref()
-                .or(context.workspace_root.as_deref())
-                .or(context.cwd.as_deref()),
-        }
+        let cwd = context.cwd.as_deref()?;
+        self.is_in_display_scope(cwd).then_some(cwd)
     }
 
     fn rebuild_rows(&mut self, capacity: usize) {
-        self.rows = self.cache.rows(&self.state);
+        self.rows = if let Some(root) = &self.display_root {
+            let root_index = self
+                .exact_root_index(&root.path)
+                .unwrap_or(VIRTUAL_ROOT_INDEX);
+            self.cache.rows_for_root(&self.state, root, root_index)
+        } else {
+            self.cache.rows(&self.state)
+        };
+        if let Some(error) = &self.last_error {
+            self.rows.push(ExplorerRow {
+                path: None,
+                root_index: VIRTUAL_ROOT_INDEX,
+                depth: 1,
+                label: error.clone(),
+                kind: ExplorerRowKind::Error,
+                expanded: false,
+            });
+        }
         self.rendered_capacity = capacity;
 
         let target_path = if self.focused {
@@ -254,10 +482,6 @@ impl ExplorerUi {
         self.rendered_start = self.scroll;
     }
 
-    fn row(&self, index: usize) -> Option<&ExplorerRow> {
-        self.rows.get(index)
-    }
-
     fn selected_index(&self) -> Option<usize> {
         let path = self.selected_path.as_deref()?;
         self.rows
@@ -268,7 +492,7 @@ impl ExplorerUi {
     fn set_selected_index(&mut self, index: usize) {
         if let Some(row) = self.rows.get(index) {
             self.selected_path = row.path.clone();
-            self.selected_root = Some(row.root_index);
+            self.selected_root = (row.root_index != VIRTUAL_ROOT_INDEX).then_some(row.root_index);
             self.focused = true;
         }
     }
@@ -357,16 +581,6 @@ impl ExplorerUi {
     }
 }
 
-fn row_prefix(row: &ExplorerRow) -> &'static str {
-    match row.kind {
-        ExplorerRowKind::Root | ExplorerRowKind::Directory if row.expanded => "⌄ ",
-        ExplorerRowKind::Root | ExplorerRowKind::Directory => "› ",
-        ExplorerRowKind::File => "  ",
-        ExplorerRowKind::Loading => "  ",
-        ExplorerRowKind::Error | ExplorerRowKind::Truncated => "! ",
-    }
-}
-
 fn truncate_to_width(text: &str, max_width: usize) -> String {
     if UnicodeWidthStr::width(text) <= max_width {
         return text.to_string();
@@ -386,13 +600,6 @@ fn truncate_to_width(text: &str, max_width: usize) -> String {
     }
     result.push('…');
     result
-}
-
-fn process_label(process: Option<&str>) -> String {
-    process
-        .and_then(|process| Path::new(process).file_name())
-        .map(|name| name.to_string_lossy().to_string())
-        .unwrap_or_else(|| "unknown".to_string())
 }
 
 impl TermWindow {
@@ -567,10 +774,20 @@ impl TermWindow {
             Some(index) => index,
             None => return,
         };
-        if self.explorer.state.remove_root(index).is_some() {
+        if let Some(removed) = self.explorer.state.remove_root(index) {
             self.explorer.selected_path = None;
             self.explorer.selected_root = None;
+            if self
+                .explorer
+                .display_root
+                .as_ref()
+                .map(|root| root.path == removed.path)
+                .unwrap_or(false)
+            {
+                self.explorer.display_root = self.explorer.state.roots.first().cloned();
+            }
             self.explorer.cache.clear();
+            self.explorer.request_expanded_directories();
             self.explorer.persist();
             if let Some(window) = self.window.as_ref() {
                 window.invalidate();
@@ -605,17 +822,28 @@ impl TermWindow {
                         "Workspace root is not a directory: {}",
                         path.display()
                     ));
+                    if let Some(window) = self.window.as_ref() {
+                        window.invalidate();
+                    }
                     return;
                 }
                 let index = self.explorer.state.add_root(path.clone());
-                self.explorer.state.expanded.insert(path.clone());
-                self.explorer.selected_path = Some(path.clone());
+                self.explorer.state.follow_mode = FollowMode::Locked;
+                self.explorer.set_display_root(path.clone(), true);
+                self.explorer.selected_path = Some(path);
                 self.explorer.selected_root = Some(index);
-                self.explorer.request_directory(path);
                 self.explorer.persist();
             }
             ExplorerPromptKind::RenameRoot(index) => {
                 self.explorer.state.rename_root(index, value);
+                if let (Some(displayed), Some(root)) = (
+                    self.explorer.display_root.as_mut(),
+                    self.explorer.state.roots.get(index),
+                ) {
+                    if displayed.path == root.path {
+                        displayed.name = root.name.clone();
+                    }
+                }
                 self.explorer.persist();
             }
         }
@@ -737,65 +965,132 @@ impl TermWindow {
         top: f32,
         left: f32,
         width: f32,
+        height: f32,
         foreground: RgbColor,
-        background: RgbColor,
+        _background: RgbColor,
+        bold: bool,
     ) -> anyhow::Result<()> {
-        let mut attributes = CellAttributes::default();
-        attributes
-            .set_foreground(ColorSpec::from(foreground))
-            .set_background(ColorSpec::from(background));
-        let line = Line::from_text(text, &attributes, SEQ_ZERO, None);
-        let palette = self.palette().clone();
+        let mut attributes = FontAttributes::new("Helvetica Neue");
+        if bold {
+            attributes.weight = FontWeight::BOLD;
+        }
+        let font = self.fonts.resolve_font(&TextStyle {
+            font: vec![attributes],
+            foreground: None,
+        })?;
+        let render_metrics = RenderMetrics::with_font_metrics(&font.metrics());
+        let top = top + ((height - render_metrics.cell_size.height as f32) / 2.).max(0.);
         let gl_state = self.render_state.as_ref().unwrap();
-        let white_space = gl_state.util_sprites.white_space.texture_coords();
-        let filled_box = gl_state.util_sprites.filled_box.texture_coords();
-        let cell_width = self.render_metrics.cell_size.width as usize;
-        let cols = (width as usize / cell_width).max(1);
-        self.render_screen_line(
-            RenderScreenLineParams {
-                top_pixel_y: top,
-                left_pixel_x: left,
-                pixel_width: width,
-                stable_line_idx: None,
-                line: &line,
-                selection: 0..0,
-                cursor: &StableCursorPosition::default(),
-                palette: &palette,
-                dims: &RenderableDimensions {
-                    cols,
-                    physical_top: 0,
-                    scrollback_rows: 0,
-                    scrollback_top: 0,
-                    viewport_rows: 1,
-                    dpi: self.terminal_size.dpi,
-                    pixel_height: self.render_metrics.cell_size.height as usize,
-                    pixel_width: width as usize,
-                    reverse_video: false,
+        let element = Element::new(&font, ElementContent::Text(text.to_string()));
+        let computed = self.compute_element(
+            &LayoutContext {
+                width: DimensionContext {
+                    dpi: self.dimensions.dpi as f32,
+                    pixel_max: self.dimensions.pixel_width as f32,
+                    pixel_cell: render_metrics.cell_size.width as f32,
                 },
-                config: &self.config,
-                cursor_border_color: LinearRgba::default(),
-                foreground: foreground.to_linear_tuple_rgba(),
-                pane: None,
-                is_active: true,
-                selection_fg: LinearRgba::default(),
-                selection_bg: LinearRgba::default(),
-                cursor_fg: LinearRgba::default(),
-                cursor_bg: LinearRgba::default(),
-                cursor_is_default_color: true,
-                white_space,
-                filled_box,
-                window_is_transparent: false,
-                default_bg: background.to_linear_tuple_rgba(),
-                style: None,
-                font: None,
-                use_pixel_positioning: self.config.experimental_pixel_positioning,
-                render_metrics: self.render_metrics,
-                shape_key: None,
-                password_input: false,
+                height: DimensionContext {
+                    dpi: self.dimensions.dpi as f32,
+                    pixel_max: self.dimensions.pixel_height as f32,
+                    pixel_cell: render_metrics.cell_size.height as f32,
+                },
+                bounds: euclid::rect(left, top, width, render_metrics.cell_size.height as f32),
+                metrics: &render_metrics,
+                gl_state,
+                zindex: 0,
             },
+            &element,
+        )?;
+
+        let cells = match &computed.content {
+            crate::termwindow::box_model::ComputedElementContent::Text(cells) => cells,
+            _ => unreachable!("text element computed to non-text content"),
+        };
+        let left_offset = self.dimensions.pixel_width as f32 / -2.;
+        let top_offset = self.dimensions.pixel_height as f32 / -2.;
+        let mut pos_x = computed.content_rect.min_x();
+        let color = foreground.to_linear_tuple_rgba();
+        for cell in cells {
+            if pos_x >= computed.content_rect.max_x() {
+                break;
+            }
+            match cell {
+                ElementCell::Sprite(sprite) => {
+                    let glyph_width = sprite.coords.width() as f32;
+                    let glyph_height = sprite.coords.height() as f32;
+                    if pos_x + glyph_width > computed.content_rect.max_x() {
+                        break;
+                    }
+                    let mut quad = layers.allocate(1)?;
+                    quad.set_position(
+                        pos_x + left_offset,
+                        computed.content_rect.min_y() + top_offset,
+                        pos_x + left_offset + glyph_width,
+                        computed.content_rect.min_y() + top_offset + glyph_height,
+                    );
+                    quad.set_fg_color(color);
+                    quad.set_alt_color_and_mix_value(color, 0.);
+                    quad.set_texture(sprite.texture_coords());
+                    quad.set_hsv(None);
+                    pos_x += glyph_width;
+                }
+                ElementCell::Glyph(glyph) => {
+                    if let Some(texture) = glyph.texture.as_ref() {
+                        let pos_y = computed.content_rect.min_y() + top_offset
+                            - (glyph.y_offset + glyph.bearing_y).get() as f32
+                            + computed.baseline;
+                        if pos_x + glyph.x_advance.get() as f32 > computed.content_rect.max_x() {
+                            break;
+                        }
+                        let glyph_x = pos_x + (glyph.x_offset + glyph.bearing_x).get() as f32;
+                        let glyph_width = texture.coords.size.width as f32 * glyph.scale as f32;
+                        let glyph_height = texture.coords.size.height as f32 * glyph.scale as f32;
+                        let mut quad = layers.allocate(1)?;
+                        quad.set_position(
+                            glyph_x + left_offset,
+                            pos_y,
+                            glyph_x + left_offset + glyph_width,
+                            pos_y + glyph_height,
+                        );
+                        quad.set_fg_color(color);
+                        quad.set_alt_color_and_mix_value(color, 0.);
+                        quad.set_texture(texture.texture_coords());
+                        quad.set_has_color(glyph.has_color);
+                        quad.set_hsv(None);
+                    }
+                    pos_x += glyph.x_advance.get() as f32;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn draw_explorer_icon(
+        &self,
+        layers: &mut TripleLayerQuadAllocator,
+        icon: &'static [Poly],
+        x: usize,
+        y: usize,
+        size: usize,
+        color: RgbColor,
+    ) -> anyhow::Result<()> {
+        self.poly_quad(
             layers,
+            1,
+            euclid::point2(x as f32, y as f32),
+            icon,
+            1,
+            euclid::size2(size as f32, size as f32),
+            color.to_linear_tuple_rgba(),
         )?;
         Ok(())
+    }
+
+    fn explorer_item_hovered(&self, expected: ExplorerUiItem) -> bool {
+        matches!(
+            self.last_ui_item.as_ref().map(|item| &item.item_type),
+            Some(UIItemType::Explorer(current)) if *current == expected
+        )
     }
 
     pub fn paint_explorer(&mut self, layers: &mut TripleLayerQuadAllocator) -> anyhow::Result<()> {
@@ -806,22 +1101,15 @@ impl TermWindow {
 
         let border = self.get_os_border();
         let width = self.explorer.state.width_px;
-        let cell_height = self.render_metrics.cell_size.height as usize;
-        let header_height = self
-            .tab_bar_pixel_height()
-            .unwrap_or(cell_height as f32)
-            .max(cell_height as f32) as usize;
         let top = border.top.get();
         let bottom = self
             .dimensions
             .pixel_height
             .saturating_sub(border.bottom.get());
-        let status_rows = 4usize;
-        let status_height = status_rows * cell_height;
-        let tree_top = top + header_height;
-        let tree_bottom = bottom.saturating_sub(status_height);
+        let tree_top = top + TITLE_HEIGHT;
+        let tree_bottom = bottom;
         let tree_height = tree_bottom.saturating_sub(tree_top);
-        let capacity = tree_height / cell_height;
+        let capacity = tree_height / ROW_HEIGHT;
         self.explorer.rebuild_rows(capacity);
 
         self.filled_rectangle(
@@ -829,12 +1117,6 @@ impl TermWindow {
             0,
             euclid::rect(0., top as f32, width as f32, (bottom - top) as f32),
             SIDEBAR_BG.to_linear_tuple_rgba(),
-        )?;
-        self.filled_rectangle(
-            layers,
-            0,
-            euclid::rect(0., top as f32, width as f32, header_height as f32),
-            HEADER_BG.to_linear_tuple_rgba(),
         )?;
         self.filled_rectangle(
             layers,
@@ -855,61 +1137,65 @@ impl TermWindow {
             item_type: UIItemType::Explorer(ExplorerUiItem::Surface),
         });
 
-        let actions = [
-            (ExplorerHeaderAction::AddRoot, "+"),
-            (ExplorerHeaderAction::Reveal, "◎"),
-            (ExplorerHeaderAction::CycleFollowMode, "⇄"),
-            (
-                ExplorerHeaderAction::ToggleHidden,
-                if self.explorer.state.show_hidden {
-                    "•"
-                } else {
-                    "◦"
-                },
-            ),
+        let actions: [(ExplorerHeaderAction, &'static [Poly]); 4] = [
+            (ExplorerHeaderAction::AddRoot, ADD_ROOT_ICON),
+            (ExplorerHeaderAction::Reveal, REVEAL_ICON),
+            (ExplorerHeaderAction::CycleFollowMode, FOLLOW_ICON),
+            (ExplorerHeaderAction::ToggleHidden, HIDDEN_ICON),
         ];
-        let action_width = cell_height.max(22);
-        let header_text_width = width
-            .saturating_sub(actions.len() * action_width)
-            .saturating_sub(HORIZONTAL_PADDING * 2);
-        let header_cells = header_text_width / self.render_metrics.cell_size.width as usize;
-        let follow_label = self.explorer.state.follow_mode.label();
-        let full_header = format!("EXPLORER  {follow_label}");
-        let compact_header = format!("EXP  {follow_label}");
-        let header = if full_header.chars().count() <= header_cells {
-            full_header
-        } else if compact_header.chars().count() <= header_cells {
-            compact_header
-        } else {
-            truncate_to_width(follow_label, header_cells)
-        };
+        let actions_left = width.saturating_sub(actions.len() * ACTION_SIZE + 4);
+        let header_text_width = actions_left.saturating_sub(TITLE_LEFT + 4);
         self.render_explorer_line(
             layers,
-            &header,
+            "EXPLORER",
             top as f32,
-            HORIZONTAL_PADDING as f32,
+            TITLE_LEFT as f32,
             header_text_width as f32,
+            TITLE_HEIGHT as f32,
             TEXT,
-            HEADER_BG,
+            SIDEBAR_BG,
+            false,
         )?;
 
-        for (offset, (action, label)) in actions.iter().enumerate() {
-            let x = width.saturating_sub((actions.len() - offset) * action_width);
+        for (offset, (action, icon)) in actions.iter().enumerate() {
+            let x = actions_left + offset * ACTION_SIZE;
+            let y = top + (TITLE_HEIGHT - ACTION_SIZE) / 2;
+            if self.explorer_item_hovered(ExplorerUiItem::Header(*action)) {
+                self.filled_rectangle(
+                    layers,
+                    0,
+                    euclid::rect(x as f32, y as f32, ACTION_SIZE as f32, ACTION_SIZE as f32),
+                    HOVER_BG.to_linear_tuple_rgba(),
+                )?;
+            }
             self.ui_items.push(UIItem {
                 x,
-                y: top,
-                width: action_width,
-                height: header_height,
+                y,
+                width: ACTION_SIZE,
+                height: ACTION_SIZE,
                 item_type: UIItemType::Explorer(ExplorerUiItem::Header(*action)),
             });
-            self.render_explorer_line(
+            let color = match action {
+                ExplorerHeaderAction::CycleFollowMode
+                    if self.explorer.state.follow_mode == FollowMode::Locked =>
+                {
+                    ACCENT
+                }
+                ExplorerHeaderAction::CycleFollowMode
+                    if self.explorer.state.follow_mode == FollowMode::ProjectFollow =>
+                {
+                    TEXT
+                }
+                ExplorerHeaderAction::ToggleHidden if self.explorer.state.show_hidden => ACCENT,
+                _ => MUTED,
+            };
+            self.draw_explorer_icon(
                 layers,
-                label,
-                top as f32,
-                (x + action_width / 3) as f32,
-                action_width as f32,
-                MUTED,
-                HEADER_BG,
+                icon,
+                x + (ACTION_SIZE - ICON_SIZE) / 2,
+                y + (ACTION_SIZE - ICON_SIZE) / 2,
+                ICON_SIZE,
+                color,
             )?;
         }
 
@@ -919,13 +1205,22 @@ impl TermWindow {
         let end = (start + capacity).min(self.explorer.rows.len());
         for (screen_row, row_index) in (start..end).enumerate() {
             let row = self.explorer.rows[row_index].clone();
-            let y = tree_top + screen_row * cell_height;
+            let y = tree_top + screen_row * ROW_HEIGHT;
+            let hovered = self.explorer_item_hovered(ExplorerUiItem::Row(row_index));
             let is_active = row.path == active_path;
             let is_selected = self.explorer.focused && row.path == selected_path;
-            let background = if is_selected {
-                SELECTED_BG
-            } else if is_active {
-                ACTIVE_BG
+            let background = if row.kind == ExplorerRowKind::Root {
+                if hovered {
+                    HOVER_BG
+                } else {
+                    SIDEBAR_BG
+                }
+            } else if is_selected {
+                ACTIVE_SELECTION_BG
+            } else if row.path == selected_path || is_active {
+                INACTIVE_SELECTION_BG
+            } else if hovered {
+                HOVER_BG
             } else {
                 SIDEBAR_BG
             };
@@ -933,96 +1228,124 @@ impl TermWindow {
                 self.filled_rectangle(
                     layers,
                     0,
-                    euclid::rect(0., y as f32, width as f32, cell_height as f32),
+                    euclid::rect(0., y as f32, width as f32, ROW_HEIGHT as f32),
                     background.to_linear_tuple_rgba(),
                 )?;
             }
-            if is_active {
+
+            if row.kind == ExplorerRowKind::Root {
                 self.filled_rectangle(
                     layers,
+                    0,
+                    euclid::rect(0., (y + ROW_HEIGHT - 1) as f32, width as f32, 1.),
+                    DIVIDER.to_linear_tuple_rgba(),
+                )?;
+                self.draw_explorer_icon(
+                    layers,
+                    if row.expanded {
+                        CHEVRON_DOWN
+                    } else {
+                        CHEVRON_RIGHT
+                    },
                     2,
-                    euclid::rect(0., y as f32, 2., cell_height as f32),
-                    ACCENT.to_linear_tuple_rgba(),
+                    y + (ROW_HEIGHT - ICON_SIZE) / 2,
+                    ICON_SIZE,
+                    TEXT,
+                )?;
+                let max_cells = width.saturating_sub(26) / 7;
+                self.render_explorer_line(
+                    layers,
+                    &truncate_to_width(&row.label.to_uppercase(), max_cells),
+                    y as f32,
+                    22.,
+                    width.saturating_sub(26) as f32,
+                    ROW_HEIGHT as f32,
+                    TEXT,
+                    background,
+                    true,
+                )?;
+            } else {
+                let depth = row.depth.saturating_sub(1);
+                for guide in 0..depth {
+                    let guide_x = TREE_LEFT + ICON_SIZE / 2 + guide * TREE_INDENT;
+                    self.filled_rectangle(
+                        layers,
+                        0,
+                        euclid::rect(guide_x as f32, y as f32, 1., ROW_HEIGHT as f32),
+                        INDENT_GUIDE.to_linear_tuple_rgba(),
+                    )?;
+                }
+
+                let twistie_x = TREE_LEFT + depth * TREE_INDENT;
+                let icon_x = twistie_x + ICON_SIZE;
+                let icon_y = y + (ROW_HEIGHT - ICON_SIZE) / 2;
+                if matches!(row.kind, ExplorerRowKind::Directory) {
+                    self.draw_explorer_icon(
+                        layers,
+                        if row.expanded {
+                            CHEVRON_DOWN
+                        } else {
+                            CHEVRON_RIGHT
+                        },
+                        twistie_x,
+                        icon_y,
+                        ICON_SIZE,
+                        TEXT,
+                    )?;
+                    self.draw_explorer_icon(layers, FOLDER_ICON, icon_x, icon_y, ICON_SIZE, ICON)?;
+                } else if row.kind == ExplorerRowKind::File {
+                    self.draw_explorer_icon(layers, FILE_ICON, icon_x, icon_y, ICON_SIZE, ICON)?;
+                }
+
+                let text_left = icon_x + ICON_SIZE + 2;
+                let foreground = match row.kind {
+                    ExplorerRowKind::Error => ERROR,
+                    ExplorerRowKind::Loading | ExplorerRowKind::Truncated => MUTED,
+                    _ if is_selected => RgbColor::new_8bpc(255, 255, 255),
+                    _ => TEXT,
+                };
+                let max_cells = width.saturating_sub(text_left + 6) / 7;
+                self.render_explorer_line(
+                    layers,
+                    &truncate_to_width(&row.label, max_cells),
+                    y as f32,
+                    text_left as f32,
+                    width.saturating_sub(text_left + 4) as f32,
+                    ROW_HEIGHT as f32,
+                    foreground,
+                    background,
+                    false,
                 )?;
             }
-            let indent = "  ".repeat(row.depth);
-            let text = format!("{indent}{}{}", row_prefix(&row), row.label);
-            let max_cells = width.saturating_sub(HORIZONTAL_PADDING * 2)
-                / self.render_metrics.cell_size.width as usize;
-            let text = truncate_to_width(&text, max_cells);
-            let foreground = match row.kind {
-                ExplorerRowKind::Error => ERROR,
-                ExplorerRowKind::Loading | ExplorerRowKind::Truncated => MUTED,
-                _ => TEXT,
-            };
-            self.render_explorer_line(
-                layers,
-                &text,
-                y as f32,
-                HORIZONTAL_PADDING as f32,
-                width.saturating_sub(HORIZONTAL_PADDING * 2) as f32,
-                foreground,
-                background,
-            )?;
             self.ui_items.push(UIItem {
                 x: 0,
                 y,
                 width,
-                height: cell_height,
+                height: ROW_HEIGHT,
                 item_type: UIItemType::Explorer(ExplorerUiItem::Row(row_index)),
             });
         }
 
-        self.filled_rectangle(
-            layers,
-            2,
-            euclid::rect(0., tree_bottom as f32, width as f32, DIVIDER_WIDTH as f32),
-            DIVIDER.to_linear_tuple_rgba(),
-        )?;
-        let context_lines = if let Some(context) = &self.explorer.active_context {
-            vec![
-                format!(
-                    "Pane {} · {} · {}",
-                    context.pane_id,
-                    process_label(context.foreground_process.as_deref()),
-                    context.source.label()
-                ),
-                context
-                    .cwd
-                    .as_ref()
-                    .map(|path| path.display().to_string())
-                    .unwrap_or_else(|| "Current directory unavailable".to_string()),
-                context
-                    .workspace_root
-                    .as_ref()
-                    .map(|path| format!("Workspace: {}", path.display()))
-                    .unwrap_or_else(|| "Workspace: unresolved".to_string()),
-                self.explorer
-                    .last_error
-                    .clone()
-                    .or_else(|| context.error.clone())
-                    .unwrap_or_else(|| "↑↓ navigate · ←→ expand · ⌘↵ new tab".to_string()),
-            ]
-        } else {
-            vec![
-                "Waiting for pane context…".to_string(),
-                String::new(),
-                String::new(),
-                "A add root · F/P/L follow · R reveal".to_string(),
-            ]
-        };
-        for (index, text) in context_lines.iter().enumerate() {
-            let y = tree_bottom + index * cell_height;
-            let max_cells = width.saturating_sub(HORIZONTAL_PADDING * 2)
-                / self.render_metrics.cell_size.width as usize;
-            self.render_explorer_line(
+        if self.explorer.rows.len() > capacity && capacity > 0 {
+            let thumb_height = (tree_height * capacity / self.explorer.rows.len()).max(20);
+            let max_scroll = self.explorer.rows.len().saturating_sub(capacity);
+            let thumb_travel = tree_height.saturating_sub(thumb_height);
+            let thumb_top = tree_top
+                + if max_scroll == 0 {
+                    0
+                } else {
+                    thumb_travel * self.explorer.rendered_start / max_scroll
+                };
+            self.filled_rectangle(
                 layers,
-                &truncate_to_width(text, max_cells),
-                y as f32,
-                HORIZONTAL_PADDING as f32,
-                width.saturating_sub(HORIZONTAL_PADDING * 2) as f32,
-                if index == 0 { TEXT } else { MUTED },
-                SIDEBAR_BG,
+                2,
+                euclid::rect(
+                    width.saturating_sub(5) as f32,
+                    thumb_top as f32,
+                    3.,
+                    thumb_height as f32,
+                ),
+                MUTED.to_linear_tuple_rgba(),
             )?;
         }
 
