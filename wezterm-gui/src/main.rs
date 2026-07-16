@@ -66,11 +66,12 @@ pub use termwindow::{set_window_class, set_window_position, TermWindow, ICON_DAT
 
 #[derive(Debug, Parser)]
 #[command(
-    about = "Wez's Terminal Emulator\nhttp://github.com/wez/wezterm",
+    name = "cosmos-term-gui",
+    about = "Cosmos Term — a standalone WezTerm-based terminal workspace",
     version = config::wezterm_version()
 )]
 struct Opt {
-    /// Skip loading wezterm.lua
+    /// Skip loading cosmos.lua
     #[arg(long, short = 'n')]
     skip_config: bool,
 
@@ -122,7 +123,7 @@ enum SubCommand {
     #[command(name = "serial", about = "Open a serial port")]
     Serial(SerialCommand),
 
-    #[command(name = "connect", about = "Connect to wezterm multiplexer")]
+    #[command(name = "connect", about = "Connect to a Cosmos Term multiplexer")]
     Connect(ConnectCommand),
 
     #[command(name = "ls-fonts", about = "Display information about fonts")]
@@ -397,7 +398,7 @@ async fn async_run_terminal_gui(
 ) -> anyhow::Result<()> {
     let unix_socket_path =
         config::RUNTIME_DIR.join(format!("gui-sock-{}", unsafe { libc::getpid() }));
-    std::env::set_var("WEZTERM_UNIX_SOCKET", unix_socket_path.clone());
+    std::env::set_var("COSMOS_TERM_UNIX_SOCKET", unix_socket_path.clone());
     wezterm_blob_leases::register_storage(Arc::new(
         wezterm_blob_leases::simple_tempdir::SimpleTempDir::new()?,
     ))?;
@@ -542,7 +543,7 @@ impl Publish {
                                 "Running GUI is a different executable from us, will start a new one");
                         }
                         if vers.config_file_path
-                            != std::env::var_os("WEZTERM_CONFIG_FILE").map(Into::into)
+                            != std::env::var_os("COSMOS_TERM_CONFIG_FILE").map(Into::into)
                         {
                             *self = Publish::NoConnectNoPublish;
                             anyhow::bail!(
@@ -601,7 +602,7 @@ impl Publish {
                         Ok(res) => {
                             log::info!(
                                 "Spawned your command via the existing GUI instance. \
-                             Use wezterm start --always-new-process if you do not want this behavior. \
+                             Use cosmos-term start --always-new-process if you do not want this behavior. \
                              Result={:?}",
                                 res
                             );
@@ -672,7 +673,6 @@ fn setup_mux(
             .unwrap_or(mux::DEFAULT_WORKSPACE),
     );
     mux.set_active_workspace(&default_workspace_name);
-    crate::update::load_last_release_info_and_set_banner();
     update_mux_domains(config)?;
 
     let default_name =
@@ -783,7 +783,7 @@ fn notify_on_panic() {
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         if let Some(s) = info.payload().downcast_ref::<&str>() {
-            fatal_toast_notification("Wezterm panic", s);
+            fatal_toast_notification("Cosmos Term panic", s);
         }
         default_hook(info);
     }));
@@ -791,7 +791,7 @@ fn notify_on_panic() {
 
 fn terminate_with_error_message(err: &str) -> ! {
     log::error!("{}; terminating", err);
-    fatal_toast_notification("Wezterm Error", &err);
+    fatal_toast_notification("Cosmos Term Error", &err);
     std::process::exit(1);
 }
 
@@ -976,7 +976,7 @@ pub fn run_ls_fonts(config: config::ConfigHandle, cmd: &LsFontsCommand) -> anyho
                     if let Some(block) = info.only_char.and_then(BlockKey::from_char) {
                         texture.replace(glyph_cache.cached_block(block, &render_metrics)?);
                         println!(
-                            "{:2} {:4} {:12} drawn by wezterm because custom_block_glyphs=true: {:?}",
+                            "{:2} {:4} {:12} drawn by Cosmos Term because custom_block_glyphs=true: {:?}",
                             info.cluster, text, escaped, block
                         );
                         is_custom = true;
@@ -1156,7 +1156,7 @@ fn run() -> anyhow::Result<()> {
     {
         unsafe {
             ::windows::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID(
-                ::windows::core::PCWSTR(wide_string("org.wezfurlong.wezterm").as_ptr()),
+                ::windows::core::PCWSTR(wide_string("com.navilan.cosmos-term").as_ptr()),
             )
             .unwrap();
         }
@@ -1214,7 +1214,7 @@ fn run() -> anyhow::Result<()> {
         Some(sub) => sub,
         None => {
             // Need to fake an argv0
-            let mut argv = vec!["wezterm-gui".to_string()];
+            let mut argv = vec!["cosmos-term-gui".to_string()];
             for a in &config.default_gui_startup_args {
                 argv.push(a.clone());
             }

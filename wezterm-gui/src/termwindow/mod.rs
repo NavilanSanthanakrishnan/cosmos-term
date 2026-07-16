@@ -72,6 +72,7 @@ pub mod background;
 pub mod box_model;
 pub mod charselect;
 pub mod clipboard;
+pub mod cosmos;
 pub mod keyevent;
 pub mod modal;
 mod mouseevent;
@@ -84,6 +85,7 @@ mod selection;
 pub mod spawn;
 pub mod webgpu;
 use crate::spawn::SpawnWhere;
+use cosmos::{ExplorerPromptKind, ExplorerUi, ExplorerUiItem};
 use prevcursor::PrevCursorPos;
 
 const ATLAS_SIZE: usize = 128;
@@ -93,7 +95,7 @@ lazy_static::lazy_static! {
     static ref POSITION: Mutex<Option<GuiPosition>> = Mutex::new(None);
 }
 
-pub const ICON_DATA: &'static [u8] = include_bytes!("../../../assets/icon/terminal.png");
+pub const ICON_DATA: &'static [u8] = include_bytes!("../../../assets/icon/cosmos-term.png");
 
 pub fn set_window_position(pos: GuiPosition) {
     POSITION.lock().unwrap().replace(pos);
@@ -143,6 +145,11 @@ pub enum TermWindowNotif {
     },
     MuxNotification(MuxNotification),
     EmitStatusUpdate,
+    ExplorerTick,
+    ExplorerPromptResult {
+        kind: ExplorerPromptKind,
+        value: Option<String>,
+    },
     Apply(Box<dyn FnOnce(&mut TermWindow) + Send + Sync>),
     SwitchToMuxWindow(MuxWindowId),
 }
@@ -155,6 +162,7 @@ pub enum UIItemType {
     ScrollThumb,
     BelowScrollThumb,
     Split(PositionedSplit),
+    Explorer(ExplorerUiItem),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -378,6 +386,7 @@ pub struct TermWindow {
     key_table_state: KeyTableState,
     show_tab_bar: bool,
     show_scroll_bar: bool,
+    explorer: ExplorerUi,
     tab_bar: TabBarState,
     fancy_tab_bar: Option<box_model::ComputedElement>,
     pub right_status: String,
@@ -589,6 +598,8 @@ impl TermWindow {
 
         let render_metrics = RenderMetrics::new(&fontconfig)?;
         log::trace!("using render_metrics {:#?}", render_metrics);
+        let explorer = ExplorerUi::load();
+        let explorer_width = explorer.total_width();
 
         // Initially we have only a single tab, so take that into account
         // for the tab bar state.
@@ -640,7 +651,8 @@ impl TermWindow {
         let padding_bottom = config.window_padding.bottom.evaluate_as_pixels(v_context) as usize;
 
         let mut dimensions = Dimensions {
-            pixel_width: (terminal_size.pixel_width + padding_left + padding_right) as usize,
+            pixel_width: (terminal_size.pixel_width + padding_left + padding_right + explorer_width)
+                as usize,
             pixel_height: ((terminal_size.rows * render_metrics.cell_size.height as usize)
                 + padding_top
                 + padding_bottom) as usize
@@ -696,6 +708,7 @@ impl TermWindow {
             dead_key_status: DeadKeyStatus::None,
             show_tab_bar,
             show_scroll_bar: config.enable_scroll_bar,
+            explorer,
             tab_bar: TabBarState::default(),
             fancy_tab_bar: None,
             right_status: String::new(),
@@ -849,7 +862,7 @@ impl TermWindow {
                     ResizeIncrementCalculator {
                         x: myself.render_metrics.cell_size.width as u16,
                         y: myself.render_metrics.cell_size.height as u16,
-                        padding_left: padding_left,
+                        padding_left: padding_left + myself.explorer_width(),
                         padding_top: padding_top,
                         padding_right: padding_right,
                         padding_bottom: padding_bottom,
@@ -871,11 +884,11 @@ impl TermWindow {
             myself.load_os_parameters();
             window.show();
             myself.subscribe_to_pane_updates();
+            myself.schedule_explorer_tick();
             myself.emit_window_event("window-config-reloaded", None);
             myself.emit_status_event();
         }
 
-        crate::update::start_update_checker();
         front_end().record_known_window(window, mux_window_id);
 
         Ok(())
@@ -1255,6 +1268,14 @@ impl TermWindow {
             },
             TermWindowNotif::EmitStatusUpdate => {
                 self.emit_status_event();
+            }
+            TermWindowNotif::ExplorerTick => {
+                if self.explorer_tick() {
+                    window.invalidate();
+                }
+            }
+            TermWindowNotif::ExplorerPromptResult { kind, value } => {
+                self.apply_explorer_prompt(kind, value);
             }
             TermWindowNotif::GetSelectionForPane { pane_id, tx } => {
                 let mux = Mux::get();
@@ -1904,7 +1925,10 @@ impl TermWindow {
         };
 
         let new_tab_bar = TabBarState::new(
-            self.dimensions.pixel_width / self.render_metrics.cell_size.width as usize,
+            self.dimensions
+                .pixel_width
+                .saturating_sub(self.terminal_origin_x())
+                / self.render_metrics.cell_size.width as usize,
             if hovering_in_tab_bar {
                 Some(self.last_mouse_coords.0)
             } else {
@@ -2499,6 +2523,21 @@ impl TermWindow {
             SpawnWindow => {
                 self.spawn_command(&SpawnCommand::default(), SpawnWhere::NewWindow);
             }
+            ToggleFileExplorer => self.toggle_explorer(),
+            FocusFileExplorer => self.focus_explorer(),
+            RevealActivePaneInFileExplorer => self.reveal_active_in_explorer(),
+            CycleFileExplorerFollowMode => self.cycle_explorer_follow_mode(),
+            AddWorkspaceRoot => {
+                self.show_explorer_prompt(ExplorerPromptKind::AddRoot);
+            }
+            RemoveWorkspaceRoot => self.remove_selected_workspace_root(),
+            RenameWorkspaceRoot => {
+                if let Some(index) = self.explorer.selected_root {
+                    self.show_explorer_prompt(ExplorerPromptKind::RenameRoot(index));
+                }
+            }
+            MoveWorkspaceRoot(delta) => self.move_selected_workspace_root(*delta),
+            ToggleFileExplorerHiddenFiles => self.toggle_explorer_hidden_files(),
             SpawnCommandInNewTab(spawn) => {
                 self.spawn_command(spawn, SpawnWhere::NewTab);
             }

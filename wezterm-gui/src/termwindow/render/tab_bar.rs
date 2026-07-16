@@ -29,13 +29,22 @@ impl crate::TermWindow {
         } else {
             border.top.get() as f32
         };
+        let terminal_origin_x = self.terminal_origin_x();
+        let terminal_width = self
+            .dimensions
+            .pixel_width
+            .saturating_sub(terminal_origin_x);
 
         // Register the tab bar location
-        self.ui_items.append(&mut self.tab_bar.compute_ui_items(
+        let mut tab_items = self.tab_bar.compute_ui_items(
             tab_bar_y as usize,
             self.render_metrics.cell_size.height as usize,
             self.render_metrics.cell_size.width as usize,
-        ));
+        );
+        for item in &mut tab_items {
+            item.x += terminal_origin_x;
+        }
+        self.ui_items.append(&mut tab_items);
 
         let window_is_transparent =
             !self.window_background.is_empty() || self.config.window_background_opacity != 1.0;
@@ -54,16 +63,15 @@ impl crate::TermWindow {
         self.render_screen_line(
             RenderScreenLineParams {
                 top_pixel_y: tab_bar_y,
-                left_pixel_x: 0.,
-                pixel_width: self.dimensions.pixel_width as f32,
+                left_pixel_x: terminal_origin_x as f32,
+                pixel_width: terminal_width as f32,
                 stable_line_idx: None,
                 line: self.tab_bar.line(),
                 selection: 0..0,
                 cursor: &Default::default(),
                 palette: &palette,
                 dims: &RenderableDimensions {
-                    cols: self.dimensions.pixel_width
-                        / self.render_metrics.cell_size.width as usize,
+                    cols: terminal_width / self.render_metrics.cell_size.width as usize,
                     physical_top: 0,
                     scrollback_rows: 0,
                     scrollback_top: 0,

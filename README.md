@@ -1,40 +1,118 @@
-# Wez's Terminal
+# Cosmos Term
 
-<img height="128" alt="WezTerm Icon" src="https://raw.githubusercontent.com/wez/wezterm/main/assets/icon/wezterm-icon.svg" align="left"> *A GPU-accelerated cross-platform terminal emulator and multiplexer written by <a href="https://github.com/wez">@wez</a> and implemented in <a href="https://www.rust-lang.org/">Rust</a>*
+<img src="assets/icon/cosmos-term.svg" width="112" alt="Cosmos Term icon" align="left">
 
-User facing docs and guide at: https://wezfurlong.org/wezterm/
+Cosmos Term is a standalone, native fork of WezTerm with a VS Code-style
+filesystem explorer integrated into the left side of every terminal window.
+It retains WezTerm's terminal engine, tabs, splits, rendering, configuration
+model, and multiplexer support while keeping its application identity and
+runtime state separate from an installed WezTerm.
 
-![Screenshot](docs/screenshots/two.png)
+The current V1 is a macOS application based on WezTerm commit
+`5046fc225992db6ba2ef8812743fadfdfe4b184a`, matching the WezTerm version that
+was installed when this fork was created.
 
-*Screenshot of wezterm on macOS, running vim*
+## V1
 
-## Installation
+- Native, resizable, toggleable explorer beside terminal tabs and splits
+- Automatic reveal/highlight for the focused native pane's working directory
+- tmux-aware reveal based on the selected tmux pane, including pane changes
+- Follow, Project Follow, and Locked modes
+- Multiple named, reorderable workspace roots
+- Lazy directory loading and live non-recursive filesystem watching
+- Add, remove, rename, expand, collapse, and reorder root interactions
+- New terminal tab or split from a selected directory
+- Persistent sidebar visibility, width, roots, expansion, follow mode, and
+  hidden-file preference
+- Pane status showing pane ID, process, context source, CWD, and workspace
+- Non-destructive inline errors for inaccessible or invalid paths
 
-https://wezfurlong.org/wezterm/installation
+Cosmos Term is the terminal application itself—not a wrapper around WezTerm
+and not an editor embedding a terminal.
 
-## Getting help
+## Explorer controls
 
-This is a spare time project, so please bear with me.  There are a couple of channels for support:
+Press `Command+Shift+E` to show or hide the explorer. The header buttons are:
 
-* You can use the [GitHub issue tracker](https://github.com/wez/wezterm/issues) to see if someone else has a similar issue, or to file a new one.
-* Start or join a thread in our [GitHub Discussions](https://github.com/wez/wezterm/discussions); if you have general
-  questions or want to chat with other wezterm users, you're welcome here!
-* There is a [Matrix room via Element.io](https://app.element.io/#/room/#wezterm:matrix.org)
-  for (potentially!) real time discussions.
+- `+`: add a workspace root
+- `◎`: reveal the active pane
+- `⇄`: cycle Follow → Project Follow → Locked
+- `◦` / `•`: hide or show dotfiles
 
-The GitHub Discussions and Element/Gitter rooms are better suited for questions
-than bug reports, but don't be afraid to use whichever you are most comfortable
-using and we'll work it out.
+Click a row to select and expand/collapse it. Double-click a directory to open
+it in a new tab. Drag the divider to resize the sidebar.
 
-## Supporting the Project
+When the explorer has keyboard focus:
 
-If you use and like WezTerm, please consider sponsoring it: your support helps
-to cover the fees required to maintain the project and to validate the time
-spent working on it!
+| Key | Action |
+| --- | --- |
+| `↑` / `↓` | Move selection |
+| `←` / `→` | Collapse/parent or expand/child |
+| `Return` | Expand or collapse |
+| `Command+Return` | Open directory in a new tab |
+| `Shift+Return` | Open directory in a split |
+| `A` | Add a root |
+| `F` / `P` / `L` | Select Follow, Project Follow, or Locked |
+| `R` | Reveal the active pane |
+| `.` | Toggle hidden files |
+| `F2` | Rename the selected root label |
+| `Delete` | Remove the selected root without deleting files |
+| `Escape` | Return focus to the terminal |
 
-[Read more about sponsoring](https://wezfurlong.org/wezterm/sponsor.html).
+All explorer actions are also available through the command palette and the
+View menu.
 
-* [![Sponsor WezTerm](https://img.shields.io/github/sponsors/wez?label=Sponsor%20WezTerm&logo=github&style=for-the-badge)](https://github.com/sponsors/wez)
-* [Patreon](https://patreon.com/WezFurlong)
-* [Ko-Fi](https://ko-fi.com/wezfurlong)
-* [Liberapay](https://liberapay.com/wez)
+## Isolation from WezTerm
+
+| Concern | Cosmos Term |
+| --- | --- |
+| macOS bundle ID | `com.navilan.cosmos-term` |
+| App | `/Applications/Cosmos Term.app` |
+| User config | `~/.config/cosmos-term/cosmos.lua` or `~/.cosmos-term.lua` |
+| Bundled fallback config | `Cosmos Term.app/Contents/Resources/cosmos.lua` |
+| Persistent data | `~/Library/Application Support/cosmos-term` |
+| Runtime sockets and logs | `~/Library/Caches/cosmos-term/runtime` |
+| Protocol environment | `COSMOS_TERM_UNIX_SOCKET`, `COSMOS_TERM_PANE` |
+| Config environment | `COSMOS_TERM_CONFIG_FILE`, `COSMOS_TERM_CONFIG_DIR` |
+| Child terminal identity | `TERM_PROGRAM=CosmosTerm` |
+
+Cosmos Term does not read `~/.wezterm.lua`, does not use
+`WEZTERM_UNIX_SOCKET`, and cannot accidentally direct its CLI at a running
+WezTerm GUI. The bundled config initially mirrors the personal WezTerm
+behavior that existed when the fork was created. Parent WezTerm protocol
+variables and stale tmux attachment variables are removed from new Cosmos
+terminal shells.
+
+## Build and package on macOS
+
+Prerequisites are the same as the upstream WezTerm macOS build plus a current
+Rust toolchain and Xcode Command Line Tools.
+
+```sh
+git submodule update --init --recursive
+cargo build --release -p wezterm-gui -p wezterm -p wezterm-mux-server
+ci/package-cosmos-macos.sh
+```
+
+The packaging script creates and ad-hoc signs `dist/Cosmos Term.app`. To
+install a local build, quit any running Cosmos Term instance and copy that
+bundle to `/Applications/Cosmos Term.app`.
+
+For development checks:
+
+```sh
+cargo test -p cosmos-workspace
+cargo check -p wezterm-gui -p wezterm -p wezterm-mux-server
+```
+
+See [Cosmos architecture](docs/cosmos-architecture.md) and
+[testing](docs/cosmos-testing.md) for implementation and verification details.
+The original product direction is retained in
+[the product vision](navilan-terminal-workspace-product-vision.docx).
+
+## Upstream and license
+
+Cosmos Term is derived from [WezTerm](https://github.com/wez/wezterm), created
+by Wez Furlong and contributors. The original copyright, MIT license, bundled
+font licenses, and upstream history are retained. Cosmos-specific work is also
+distributed under the repository's MIT license.

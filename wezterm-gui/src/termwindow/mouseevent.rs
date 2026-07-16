@@ -43,7 +43,8 @@ impl super::TermWindow {
             | UIItemType::AboveScrollThumb
             | UIItemType::BelowScrollThumb
             | UIItemType::ScrollThumb
-            | UIItemType::Split(_) => {}
+            | UIItemType::Split(_)
+            | UIItemType::Explorer(_) => {}
         }
     }
 
@@ -54,7 +55,8 @@ impl super::TermWindow {
             | UIItemType::AboveScrollThumb
             | UIItemType::BelowScrollThumb
             | UIItemType::ScrollThumb
-            | UIItemType::Split(_) => {}
+            | UIItemType::Split(_)
+            | UIItemType::Explorer(_) => {}
         }
     }
 
@@ -348,6 +350,10 @@ impl super::TermWindow {
             UIItemType::ScrollThumb => {
                 self.drag_scroll_thumb(item, start_event, event, context);
             }
+            UIItemType::Explorer(crate::termwindow::cosmos::ExplorerUiItem::Divider) => {
+                self.drag_explorer_divider(&event, context);
+                self.dragging.replace((item, start_event));
+            }
             _ => {
                 log::error!("drag not implemented for {:?}", item);
             }
@@ -381,6 +387,9 @@ impl super::TermWindow {
             }
             UIItemType::CloseTab(idx) => {
                 self.mouse_event_close_tab(idx, event, context);
+            }
+            UIItemType::Explorer(item) => {
+                self.mouse_event_explorer(item, event, context);
             }
         }
     }

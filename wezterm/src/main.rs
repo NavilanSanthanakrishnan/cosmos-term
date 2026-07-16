@@ -23,11 +23,12 @@ mod cli;
 
 #[derive(Debug, Parser)]
 #[command(
-    about = "Wez's Terminal Emulator\nhttp://github.com/wez/wezterm",
+    name = "cosmos-term",
+    about = "Cosmos Term — a standalone WezTerm-based terminal workspace",
     version = wezterm_version()
 )]
 pub struct Opt {
-    /// Skip loading wezterm.lua
+    /// Skip loading cosmos.lua
     #[arg(long, short = 'n')]
     skip_config: bool,
 
@@ -107,7 +108,7 @@ enum SubCommand {
     #[command(name = "serial", about = "Open a serial port")]
     Serial(SerialCommand),
 
-    #[command(name = "connect", about = "Connect to wezterm multiplexer")]
+    #[command(name = "connect", about = "Connect to a Cosmos Term multiplexer")]
     Connect(ConnectCommand),
 
     #[command(name = "ls-fonts", about = "Display information about fonts")]
@@ -192,7 +193,7 @@ struct ImgCatCommand {
     /// Set the maximum number of pixels per image frame.
     /// Images will be scaled down so that they do not exceed this size,
     /// unless `--no-resample` is also used.
-    /// The default value matches the limit set by wezterm.
+    /// The default value matches the limit set by Cosmos Term.
     /// Note that resampling the image here will reduce any animated
     /// images to a single frame.
     #[arg(long, default_value = "25000000")]
@@ -201,7 +202,7 @@ struct ImgCatCommand {
     /// Do not resample images whose frames are larger than the
     /// max-pixels value.
     /// Note that this will typically result in the image refusing
-    /// to display in wezterm.
+    /// to display in Cosmos Term.
     #[arg(long)]
     no_resample: bool,
 
@@ -762,9 +763,9 @@ fn delegate_to_gui(saver: UmaskSaver) -> anyhow::Result<()> {
     drop(saver);
 
     let exe_name = if cfg!(windows) {
-        "wezterm-gui.exe"
+        "cosmos-term-gui.exe"
     } else {
-        "wezterm-gui"
+        "cosmos-term-gui"
     };
 
     let exe = std::env::current_exe()?

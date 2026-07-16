@@ -165,11 +165,11 @@ END
         let src_plist = repo_dir
             .join("assets")
             .join("macos")
-            .join("WezTerm.app")
+            .join("Cosmos Term.app")
             .join("Contents")
             .join("Info.plist");
         let dest_plist = repo_dir.join("target").join(profile).join("Info.plist");
-        println!("cargo:rerun-if-changed=assets/macos/WezTerm.app/Contents/Info.plist");
+        println!("cargo:rerun-if-changed=assets/macos/Cosmos Term.app/Contents/Info.plist");
 
         std::fs::copy(&src_plist, &dest_plist)
             .context(format!(

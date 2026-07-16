@@ -2,6 +2,7 @@
 members = [
   "bidi",
   "bidi/generate",
+  "cosmos-workspace",
   "strip-ansi-escapes",
   "sync-color-schemes",
   "deps/cairo",
@@ -21,6 +22,9 @@ exclude = [
 [profile.release]
 opt-level = 3
 # debug = 2
+
+[profile.release.package.glium]
+opt-level = 0
 
 [profile.dev]
 # https://jakedeichert.com/blog/reducing-rust-incremental-compilation-times-on-macos-by-70-percent/

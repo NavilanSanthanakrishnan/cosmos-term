@@ -1,0 +1,36 @@
+version: 1
+workspace:
+  name: cosmos-term
+  mission: Standalone WezTerm fork with an integrated pane-aware filesystem explorer.
+  primary_platform: macos-arm64
+
+capabilities:
+  build:
+    commands:
+      - cargo check -p wezterm-gui -p wezterm -p wezterm-mux-server
+      - cargo build --release -p wezterm-gui -p wezterm -p wezterm-mux-server
+  test:
+    commands:
+      - cargo test -p cosmos-workspace
+      - ci/package-cosmos-macos.sh
+  package:
+    output: dist/Cosmos Term.app
+    signing: ad-hoc
+  live_validation:
+    native_panes: supported
+    tmux_panes: supported_with_isolated_test_socket
+    filesystem_watcher: supported
+    persistence: supported
+
+boundaries:
+  - Never mutate the user's installed WezTerm process, config, sockets, or sessions.
+  - Never mutate the default tmux server during tests.
+  - Never commit generated bundles, runtime state, logs, secrets, or personal records.
+
+durable_context:
+  startup:
+    - SESSION-HANDOFF.md
+    - memory/LEARNINGS.md
+  architecture: docs/cosmos-architecture.md
+  testing: docs/cosmos-testing.md
+  product_vision: navilan-terminal-workspace-product-vision.docx

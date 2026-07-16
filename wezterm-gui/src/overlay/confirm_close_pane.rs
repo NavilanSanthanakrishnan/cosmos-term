@@ -236,7 +236,7 @@ pub fn confirm_quit_program(
     window: ::window::Window,
     tab_id: TabId,
 ) -> anyhow::Result<()> {
-    if run_confirmation_app("🛑 Really Quit WezTerm?", &mut term)? {
+    if run_confirmation_app("🛑 Really Quit Cosmos Term?", &mut term)? {
         promise::spawn::spawn_into_main_thread(async move {
             use ::window::{Connection, ConnectionOps};
             let con = Connection::get().expect("call on gui thread");

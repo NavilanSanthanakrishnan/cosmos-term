@@ -419,7 +419,7 @@ impl CommandDef {
         commands.retain(|cmd| !cmd.menubar.is_empty());
 
         // Prefer to put the menus in this order
-        let mut order: Vec<&'static str> = vec!["WezTerm", "Shell", "Edit", "View", "Window"];
+        let mut order: Vec<&'static str> = vec!["Cosmos Term", "Shell", "Edit", "View", "Window"];
         // Add any other menus on the end
         for cmd in &commands {
             if !order.contains(&cmd.menubar[0]) {
@@ -439,11 +439,11 @@ impl CommandDef {
                         // macOS will insert stuff at the top and bottom, so we add
                         // a separator to tidy things up a bit
                         menu.add_item(&MenuItem::new_separator());
-                    } else if cmd.menubar[0] == "WezTerm" {
+                    } else if cmd.menubar[0] == "Cosmos Term" {
                         menu.assign_as_app_menu();
 
                         let about_item = MenuItem::new_with(
-                            &format!("WezTerm {}", config::wezterm_version()),
+                            &format!("Cosmos Term {}", config::wezterm_version()),
                             Some(wezterm_perform_key_assignment_sel),
                             "",
                         );
@@ -686,6 +686,78 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             menubar: &["View"],
             icon: Some("md_fullscreen"),
         },
+        ToggleFileExplorer => CommandDef {
+            brief: "Toggle Cosmos file explorer".into(),
+            doc: "Shows or hides the pane-aware filesystem explorer".into(),
+            keys: vec![(Modifiers::SUPER.union(Modifiers::SHIFT), "e".into())],
+            args: &[ArgType::ActiveWindow],
+            menubar: &["View"],
+            icon: Some("cod_files"),
+        },
+        FocusFileExplorer => CommandDef {
+            brief: "Focus Cosmos file explorer".into(),
+            doc: "Moves keyboard focus to the filesystem explorer".into(),
+            keys: vec![],
+            args: &[ArgType::ActiveWindow],
+            menubar: &["View"],
+            icon: Some("cod_files"),
+        },
+        RevealActivePaneInFileExplorer => CommandDef {
+            brief: "Reveal active pane in file explorer".into(),
+            doc: "Reveals and highlights the active native or tmux pane directory".into(),
+            keys: vec![],
+            args: &[ArgType::ActiveWindow],
+            menubar: &["View"],
+            icon: Some("cod_target"),
+        },
+        CycleFileExplorerFollowMode => CommandDef {
+            brief: "Cycle file explorer follow mode".into(),
+            doc: "Cycles Follow, Project Follow, and Locked modes".into(),
+            keys: vec![],
+            args: &[ArgType::ActiveWindow],
+            menubar: &["View"],
+            icon: Some("cod_sync"),
+        },
+        AddWorkspaceRoot => CommandDef {
+            brief: "Add file explorer workspace root".into(),
+            doc: "Prompts for a directory to add as a workspace root".into(),
+            keys: vec![],
+            args: &[ArgType::ActiveWindow],
+            menubar: &["View", "File Explorer"],
+            icon: Some("cod_folder_opened"),
+        },
+        RemoveWorkspaceRoot => CommandDef {
+            brief: "Remove selected workspace root".into(),
+            doc: "Removes the selected root from the explorer without deleting files".into(),
+            keys: vec![],
+            args: &[ArgType::ActiveWindow],
+            menubar: &["View", "File Explorer"],
+            icon: Some("cod_remove"),
+        },
+        RenameWorkspaceRoot => CommandDef {
+            brief: "Rename selected workspace root".into(),
+            doc: "Changes only the explorer label for the selected root".into(),
+            keys: vec![],
+            args: &[ArgType::ActiveWindow],
+            menubar: &["View", "File Explorer"],
+            icon: Some("cod_edit"),
+        },
+        MoveWorkspaceRoot(_) => CommandDef {
+            brief: "Reorder selected workspace root".into(),
+            doc: "Moves the selected explorer root up or down".into(),
+            keys: vec![],
+            args: &[ArgType::ActiveWindow],
+            menubar: &["View", "File Explorer"],
+            icon: Some("cod_list_ordered"),
+        },
+        ToggleFileExplorerHiddenFiles => CommandDef {
+            brief: "Toggle hidden files in file explorer".into(),
+            doc: "Shows or hides dotfiles in the filesystem explorer".into(),
+            keys: vec![],
+            args: &[ArgType::ActiveWindow],
+            menubar: &["View", "File Explorer"],
+            icon: Some("cod_eye"),
+        },
         ToggleAlwaysOnTop => CommandDef {
             brief: "Toggle always on Top".into(),
             doc: "Toggles the window between floating and non-floating states to stay on top of other windows.".into(),
@@ -750,7 +822,7 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
                 .into(),
             keys: vec![(Modifiers::SUPER, "h".into())],
             args: &[],
-            menubar: &["WezTerm"],
+            menubar: &["Cosmos Term"],
             icon: None,
         },
         SpawnWindow => CommandDef {
@@ -1265,15 +1337,15 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             doc: "Reloads the configuration file".into(),
             keys: vec![(Modifiers::SUPER, "r".into())],
             args: &[],
-            menubar: &["WezTerm"],
+            menubar: &["Cosmos Term"],
             icon: Some("md_reload"),
         },
         QuitApplication => CommandDef {
-            brief: "Quit WezTerm".into(),
-            doc: "Quits WezTerm".into(),
+            brief: "Quit Cosmos Term".into(),
+            doc: "Quits Cosmos Term".into(),
             keys: vec![(Modifiers::SUPER, "q".into())],
             args: &[],
-            menubar: &["WezTerm"],
+            menubar: &["Cosmos Term"],
             icon: Some("oct_stop"),
         },
         MoveTabRelative(-1) => CommandDef {
@@ -2052,6 +2124,16 @@ fn compute_default_actions() -> Vec<KeyAssignment> {
         ClearKeyTableStack,
         ActivateCommandPalette,
         // ----------------- View
+        ToggleFileExplorer,
+        FocusFileExplorer,
+        RevealActivePaneInFileExplorer,
+        CycleFileExplorerFollowMode,
+        AddWorkspaceRoot,
+        RemoveWorkspaceRoot,
+        RenameWorkspaceRoot,
+        MoveWorkspaceRoot(-1),
+        MoveWorkspaceRoot(1),
+        ToggleFileExplorerHiddenFiles,
         DecreaseFontSize,
         IncreaseFontSize,
         ResetFontSize,

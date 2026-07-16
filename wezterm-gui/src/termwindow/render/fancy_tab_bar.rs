@@ -461,16 +461,17 @@ impl crate::TermWindow {
         );
 
         let content = ElementContent::Children(children);
+        let border = self.get_os_border();
+        let terminal_origin_x = self.terminal_origin_x() as f32;
+        let terminal_width = self.dimensions.pixel_width as f32 - terminal_origin_x;
 
         let tabs = Element::new(&font, content)
             .display(DisplayType::Block)
             .item_type(UIItemType::TabBar(TabBarItem::None))
-            .min_width(Some(Dimension::Pixels(self.dimensions.pixel_width as f32)))
+            .min_width(Some(Dimension::Pixels(terminal_width)))
             .min_height(Some(Dimension::Pixels(tab_bar_height)))
             .vertical_align(VerticalAlign::Bottom)
             .colors(bar_colors);
-
-        let border = self.get_os_border();
 
         let mut computed = self.compute_element(
             &LayoutContext {
@@ -481,13 +482,13 @@ impl crate::TermWindow {
                 },
                 width: DimensionContext {
                     dpi: self.dimensions.dpi as f32,
-                    pixel_max: self.dimensions.pixel_width as f32,
+                    pixel_max: terminal_width,
                     pixel_cell: metrics.cell_size.width as f32,
                 },
                 bounds: euclid::rect(
                     border.left.get() as f32,
                     0.,
-                    self.dimensions.pixel_width as f32 - (border.left + border.right).get() as f32,
+                    terminal_width - (border.left + border.right).get() as f32,
                     tab_bar_height,
                 ),
                 metrics: &metrics,
@@ -498,7 +499,7 @@ impl crate::TermWindow {
         )?;
 
         computed.translate(euclid::vec2(
-            0.,
+            terminal_origin_x,
             if self.config.tab_bar_at_bottom {
                 self.dimensions.pixel_height as f32
                     - (computed.bounds.height() + border.bottom.get() as f32)

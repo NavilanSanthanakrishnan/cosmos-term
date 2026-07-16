@@ -325,6 +325,14 @@ impl super::TermWindow {
             }
         }
 
+        if is_down
+            && only_key_bindings == OnlyKeyBindings::No
+            && self.explorer_key_down(keycode, raw_modifiers)
+        {
+            context.invalidate();
+            return true;
+        }
+
         // While the leader modifier is active, only registered
         // keybindings are recognized.
         let only_key_bindings = match (only_key_bindings, leader_active) {

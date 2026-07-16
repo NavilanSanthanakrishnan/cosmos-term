@@ -107,12 +107,15 @@ impl crate::TermWindow {
 
         let cell_width = self.render_metrics.cell_size.width as f32;
         let cell_height = self.render_metrics.cell_size.height as f32;
+        let terminal_origin_x = self.terminal_origin_x() as f32;
         let background_rect = {
             // We want to fill out to the edges of the splits
             let (x, width_delta) = if pos.left == 0 {
                 (
-                    0.,
-                    padding_left + border.left.get() as f32 + (cell_width / 2.0),
+                    terminal_origin_x,
+                    padding_left - terminal_origin_x
+                        + border.left.get() as f32
+                        + (cell_width / 2.0),
                 )
             } else {
                 (
@@ -588,6 +591,7 @@ impl crate::TermWindow {
 
         let cell_width = self.render_metrics.cell_size.width as f32;
         let cell_height = self.render_metrics.cell_size.height as f32;
+        let terminal_origin_x = self.terminal_origin_x() as f32;
         let (padding_left, padding_top) = self.padding_left_top();
         let tab_bar_height = if self.show_tab_bar {
             self.tab_bar_pixel_height()?
@@ -606,8 +610,8 @@ impl crate::TermWindow {
         // We want to fill out to the edges of the splits
         let (x, width_delta) = if pos.left == 0 {
             (
-                0.,
-                padding_left + border.left.get() as f32 + (cell_width / 2.0),
+                terminal_origin_x,
+                padding_left - terminal_origin_x + border.left.get() as f32 + (cell_width / 2.0),
             )
         } else {
             (
