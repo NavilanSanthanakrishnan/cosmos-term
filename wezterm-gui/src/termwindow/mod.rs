@@ -599,7 +599,7 @@ impl TermWindow {
         let render_metrics = RenderMetrics::new(&fontconfig)?;
         log::trace!("using render_metrics {:#?}", render_metrics);
         let explorer = ExplorerUi::load();
-        let explorer_width = explorer.total_width();
+        let explorer_width = explorer.total_width(dpi);
 
         // Initially we have only a single tab, so take that into account
         // for the tab bar state.

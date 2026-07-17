@@ -15,24 +15,24 @@ was installed when this fork was created.
 ## V1
 
 - Native, persistent, resizable explorer beside terminal tabs and splits
-- Code OSS Dark Modern Explorer styling with a 35 px title, compact 22 px
-  tree rows, proportional UI text, Seti-style colored file icons, and native
-  chevrons and selection states
+- Code OSS Explorer styling with the reference `#252526` background, 35 px
+  title, 22 px rows, 11/13 px macOS system UI text, exact bundled Seti file
+  icons, native chevrons, selection states, and scrollbar geometry
 - Roomier defaults: a 420 px explorer, 14 pt text, and a 100 × 32 terminal
   viewport
 - Right-aligned Git decorations for modified, added, deleted, renamed,
   untracked, and conflicted files, resolved off the render thread
-- Folder-scoped Follow mode: the focused pane's working directory is the only
-  visible root, so parent and sibling folders are not shown
+- Permanent current-folder scope: the focused pane's exact working directory
+  is the only visible root, so saved roots, parents, and siblings never leak
+  into the tree
 - tmux-aware reveal based on the selected tmux pane, including pane changes
-- Follow, Project Follow, and Locked modes
-- Multiple named, reorderable workspace roots
 - Lazy directory loading and live non-recursive filesystem watching
-- Add, remove, rename, expand, collapse, and reorder root interactions
-- New terminal tab or split from a selected directory
-- Persistent sidebar width, roots, expansion, follow mode, and hidden-file
-  preference
+- Expand, collapse, keyboard navigation, and opening a selected directory in a
+  new terminal tab or split
+- Persistent sidebar width, expansion, and hidden-file preference
 - Non-destructive inline errors for inaccessible or invalid paths
+- Logical-pixel rendering that remains the same apparent size on 1× and Retina
+  displays
 
 Cosmos Term is the terminal application itself—not a wrapper around WezTerm
 and not an editor embedding a terminal.
@@ -41,8 +41,8 @@ and not an editor embedding a terminal.
 
 The explorer is always visible, and the legacy `Command+Shift+E` chord is
 intentionally inert. The header matches VS Code's compact `EXPLORER` title and
-single ellipsis action. Clicking the ellipsis cycles the follow mode; it turns
-blue while the view is Locked.
+single ellipsis action. Clicking the ellipsis reveals the active pane's exact
+working directory.
 
 Dotfiles are shown by default to match the reference project view, except for
 repository/runtime metadata such as `.git` and `.DS_Store`.
@@ -59,18 +59,13 @@ When the explorer has keyboard focus:
 | `Return` | Expand or collapse |
 | `Command+Return` | Open directory in a new tab |
 | `Shift+Return` | Open directory in a split |
-| `A` | Add a root |
-| `F` / `P` | Select Follow or Project Follow |
-| `L` | Toggle between Follow and Locked |
 | `R` | Reveal the active pane |
 | `.` | Toggle hidden files |
-| `F2` | Rename the selected root label |
-| `Delete` | Remove the selected root without deleting files |
 | `Escape` | Return focus to the terminal |
 
-Explorer actions are also available through the command palette and View
-menu. Clicking a terminal pane immediately returns keyboard focus to the
-terminal.
+There is no Explorer hide or lock key binding. In particular, `L`, `F`, and
+`P` remain normal terminal input. Clicking a terminal pane immediately returns
+keyboard focus to the terminal.
 
 `Command+W` closes the current tab immediately. `Command+Q` keeps the
 protected whole-application autosave flow.
