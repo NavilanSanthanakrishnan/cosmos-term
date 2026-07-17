@@ -36,8 +36,8 @@ status work shares the existing pane-context worker rather than creating a
 fifth thread or helper process.
 
 Only expanded directories are watched, and watches are non-recursive. A
-periodic refresh provides a fallback if a platform watcher misses an event.
-Listings are capped at 5,000 visible entries per directory and report
+30-second periodic refresh provides a fallback if a platform watcher misses an
+event. Listings are capped at 5,000 visible entries per directory and report
 truncation inline.
 
 ### `wezterm-gui/src/termwindow/cosmos.rs`
@@ -64,6 +64,12 @@ bottom layout inset for terminal rows, scrollbars, and bottom-positioned tab
 bars. Existing WezTerm widgets continue to use their normal layout inside the
 remaining viewport.
 
+Explorer rows are cached and regenerated only after directory, selection,
+expansion, or scope changes; Git decorations are looked up from their separate
+snapshot during paint. The service tick runs at 50 ms while a worker request
+is pending and backs off to 500 ms while idle, so terminal painting does not
+imply filesystem work or a permanent high-frequency timer.
+
 ### Narrow upstream integration
 
 The surrounding changes are intentionally limited to:
@@ -74,6 +80,8 @@ The surrounding changes are intentionally limited to:
   when a terminal pane is clicked
 - defining menu/command-palette actions while consuming the retired sidebar
   toggle chord
+- resolving known registered UI fonts directly from WezTerm's built-in font
+  map before falling back to the platform font locator
 - standalone app/config/runtime identity
 - modern compiler and macOS SDK compatibility
 
@@ -101,7 +109,7 @@ not depend on Homebrew being present in its reduced `PATH`. If the query
 fails, the explorer keeps the terminal usable, falls back to reported or
 last-known context, and displays the error in the sidebar.
 
-Context requests run approximately four times per second, independently from
+Context requests run approximately twice per second, independently from
 directory loading. This makes native focus and tmux pane changes visible
 without shell hooks. OSC 7 remains useful because it improves the CWD that
 WezTerm reports for native and remote-aware shells.
@@ -114,7 +122,8 @@ parsed into absolute file paths and refreshed independently of painting.
 Modified, added, deleted, renamed, untracked, and conflict states render at
 the right edge of their rows. `.git` itself remains excluded, matching VS
 Code's default Explorer exclusions while preserving visible dotfiles such as
-`.github`, `.vscode`, and `.gitignore`.
+`.github`, `.vscode`, and `.gitignore`. Filesystem watcher events request an
+immediate status refresh; a 30-second poll is only a missed-event fallback.
 
 ## Codex status
 
@@ -202,3 +211,10 @@ FreeType handling and the macOS full-screen constant adjustment are narrow
 backports from later upstream behavior. The package-specific `glium`
 optimization override is required to keep the baseline's default OpenGL
 renderer correct on the current LLVM toolchain.
+
+Cosmos also adds a narrow built-in-only font resolution entry point. Explorer
+fonts are already explicitly registered, so sending each UI size and weight
+through the generic CoreText locator only enumerated and parsed the complete
+macOS font catalog. Direct lookup preserves the same loaded-font cache and
+cap-height scaling while avoiding that transient startup allocation; unknown
+fonts still use the normal upstream resolver.

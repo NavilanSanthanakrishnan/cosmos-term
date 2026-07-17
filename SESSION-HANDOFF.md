@@ -42,9 +42,10 @@ explorer and using independent application/runtime identities.
   and tree labels are 15 pt. The live user-resized 263 px width was preserved
   while applying the larger text.
 - Explorer paint and repeated pane-context checks no longer queue redundant
-  directory scans. Cached expanded folders load once, watcher/periodic events
-  perform explicit refreshes, pane metadata uses the non-blocking stale-cache
-  policy, and worker responses are collected every 50 ms.
+  directory scans or rebuild unchanged rows. Cached expanded folders load
+  once, watcher/periodic events perform explicit refreshes, pane metadata uses
+  the non-blocking stale-cache policy, and worker responses are collected
+  every 50 ms only while work is pending before the timer backs off to 500 ms.
 - macOS initial geometry now uses the active screen's effective DPI. After
   Cocoa finalizes cross-screen placement, Cosmos restores the mux-requested
   cell geometry against the actual screen and resizes WebGPU before repainting;
@@ -105,13 +106,26 @@ explorer and using independent application/runtime identities.
   process enumeration. It creates no daemon, helper, launch agent, shell
   poller, `ps`, or `pgrep` process. Active-rollout metadata is checked every
   two seconds, content is read only after it changes, and broader discovery
-  across the 4 GB local session history is cached for 15 seconds.
+  across the 4 GB local session history is cached for 15 seconds. Discovery
+  keeps only the 16 newest candidates and native process counting reuses one
+  path buffer across all PIDs.
+- Explorer UI fonts now resolve directly from WezTerm's registered built-in
+  font map. The prior generic CoreText route enumerated and parsed the complete
+  macOS font catalog for each UI size/weight variant and was responsible for
+  the abnormal startup high-water mark.
+- A fresh installed launch now measures 81.8 MiB current physical footprint
+  and 237.6 MiB peak, down from the previous 954–956 MiB peak. The optimized
+  app averages 0.48% CPU across 30 steady-state idle samples (0.0–1.7%),
+  compared with 1.21% for the previous Cosmos build and 0.54% for the matched
+  fresh WezTerm baseline. The remaining memory above WezTerm is consistent
+  with Cosmos's native Explorer, Seti/UI fonts, status bar, and wider WebGPU
+  surface rather than retained font-catalog allocations.
 - Folder-scoped row generation has unit coverage for excluding both saved
   sibling roots and parent-directory siblings; Git porcelain parsing and
   layout migration are covered as well. Structured Codex usage parsing,
   nearest-reset selection, and executable-name filtering are also covered.
 - The final installed `cosmos-term-gui` SHA-256 is
-  `1dd6187a8898887713666b4d5c63a08741cf4f9fff342038a02790ec389f3e37`;
+  `e038f25df24029f4ad3fce91a58c44156fcb73f6fd3c03914832d9f740753075`;
   it exactly matches the packaged release binary.
   The final native close-lock capture is
   `/tmp/cosmos-visual/cosmos-close-lock-final.png`
@@ -158,6 +172,9 @@ intentional:
 - Initial macOS window geometry is converted from physical pixels to AppKit
   points using the active screen DPI, then reconciled once Cocoa has finalized
   mixed-DPI placement.
+- Registered Explorer UI fonts use a built-in-only resolution entry point
+  before the generic platform locator, avoiding full CoreText catalog
+  enumeration while preserving normal fallback behavior for unknown fonts.
 
 ## Remaining release work
 

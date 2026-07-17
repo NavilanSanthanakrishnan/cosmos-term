@@ -53,8 +53,10 @@ const EXPLORER_UI_FONT_FAMILY: &str = "System Font";
 const EXPLORER_UI_FONT_FAMILY: &str = "Helvetica Neue";
 const VIRTUAL_ROOT_INDEX: usize = usize::MAX;
 const SERVICE_POLL_INTERVAL: Duration = Duration::from_millis(50);
-const CONTEXT_POLL_INTERVAL: Duration = Duration::from_millis(250);
-const DIRECTORY_REFRESH_INTERVAL: Duration = Duration::from_secs(2);
+const SERVICE_IDLE_POLL_INTERVAL: Duration = Duration::from_millis(500);
+const CONTEXT_POLL_INTERVAL: Duration = Duration::from_millis(500);
+const DIRECTORY_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
+const GIT_STATUS_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 const CODEX_STATUS_REFRESH_INTERVAL: Duration = Duration::from_secs(2);
 
 fn logical_to_physical(value: usize, dpi: usize) -> usize {
@@ -194,6 +196,7 @@ pub struct ExplorerUi {
     pending_directories: HashSet<PathBuf>,
     watched_directories: HashSet<PathBuf>,
     rows: Vec<ExplorerRow>,
+    rows_dirty: bool,
     rendered_start: usize,
     rendered_capacity: usize,
     selected_path: Option<PathBuf>,
@@ -255,6 +258,7 @@ impl ExplorerUi {
             pending_directories: HashSet::new(),
             watched_directories: HashSet::new(),
             rows: vec![],
+            rows_dirty: true,
             rendered_start: 0,
             rendered_capacity: 0,
             selected_path: None,
@@ -274,7 +278,7 @@ impl ExplorerUi {
                 .unwrap_or_else(Instant::now),
             last_directory_refresh: Instant::now(),
             last_git_status_refresh: Instant::now()
-                .checked_sub(DIRECTORY_REFRESH_INTERVAL)
+                .checked_sub(GIT_STATUS_REFRESH_INTERVAL)
                 .unwrap_or_else(Instant::now),
             last_codex_status_refresh: Instant::now()
                 .checked_sub(CODEX_STATUS_REFRESH_INTERVAL)
@@ -291,6 +295,7 @@ impl ExplorerUi {
     fn persist(&mut self) {
         if let Err(err) = self.state.save(&self.state_path) {
             self.last_error = Some(format!("Unable to save explorer state: {err}"));
+            self.rows_dirty = true;
         }
     }
 
@@ -414,44 +419,62 @@ impl ExplorerUi {
             .unwrap_or_else(|| WorkspaceRoot::new(path.clone()));
         let changed = self.display_root.as_ref() != Some(&root);
         let expanded = (changed || ensure_expanded) && self.state.expanded.insert(path.clone());
-        self.display_root = Some(root);
         if changed {
+            self.display_root = Some(root);
             self.scroll = 0;
             self.selected_path = Some(path.clone());
             self.git_statuses.clear();
+            self.rows_dirty = true;
         }
         self.selected_root = self.exact_root_index(&path);
-        self.ensure_expanded_directories();
-        self.request_git_status();
+        if changed || expanded {
+            self.rows_dirty = true;
+            self.ensure_expanded_directories();
+        }
+        if changed {
+            self.request_git_status();
+        }
         changed || expanded
     }
 
     fn apply_context(&mut self, context: PaneContext, reveal_active: bool) -> bool {
         self.context_request_in_flight = false;
-        let prior = self.active_context.clone();
-        let context_changed = prior.as_ref() != Some(&context);
-        let mut changed = context_changed;
+        let mut changed = false;
         self.active_context = Some(context.clone());
 
         if let Some(cwd) = context.cwd.clone() {
-            let prior_state = self.state.clone();
             // Cosmos intentionally differs from a multi-root editor workspace:
             // the explorer is a permanent view of the active pane's exact
             // working directory. Serialized follow modes are retained only for
             // backward-compatible state loading.
+            let follow_mode_changed = self.state.follow_mode != FollowMode::Follow;
+            let was_expanded = self.state.expanded.contains(&cwd);
             self.state.follow_mode = FollowMode::Follow;
             let root_changed = self.set_display_root(cwd.clone(), reveal_active);
             changed |= root_changed;
-            if root_changed || !self.focused {
+            if (root_changed || !self.focused)
+                && self.selected_path.as_deref() != Some(cwd.as_path())
+            {
                 self.selected_path = Some(cwd);
+                self.rows_dirty = true;
+                changed = true;
             }
-            if self.state != prior_state {
+            let expansion_changed = !was_expanded
+                && self
+                    .display_root
+                    .as_ref()
+                    .map(|root| self.state.expanded.contains(&root.path))
+                    .unwrap_or(false);
+            if follow_mode_changed || expansion_changed {
                 self.persist();
                 changed = true;
             }
         } else if let Some(error) = &context.error {
-            self.last_error = Some(error.clone());
-            changed = true;
+            if self.last_error.as_ref() != Some(error) {
+                self.last_error = Some(error.clone());
+                self.rows_dirty = true;
+                changed = true;
+            }
         }
         changed
     }
@@ -463,6 +486,13 @@ impl ExplorerUi {
     }
 
     fn rebuild_rows(&mut self, capacity: usize) {
+        if !self.rows_dirty && self.rendered_capacity == capacity {
+            self.scroll = self
+                .scroll
+                .min(self.rows.len().saturating_sub(capacity.max(1)));
+            self.rendered_start = self.scroll;
+            return;
+        }
         self.rows = if let Some(root) = &self.display_root {
             let root_index = self
                 .exact_root_index(&root.path)
@@ -508,6 +538,7 @@ impl ExplorerUi {
             .scroll
             .min(self.rows.len().saturating_sub(capacity.max(1)));
         self.rendered_start = self.scroll;
+        self.rows_dirty = false;
     }
 
     fn selected_index(&self) -> Option<usize> {
@@ -522,6 +553,7 @@ impl ExplorerUi {
             self.selected_path = row.path.clone();
             self.selected_root = (row.root_index != VIRTUAL_ROOT_INDEX).then_some(row.root_index);
             self.focused = true;
+            self.rows_dirty = true;
         }
     }
 
@@ -552,6 +584,7 @@ impl ExplorerUi {
             self.state.expanded.insert(path.clone());
             self.request_directory(path, true);
         }
+        self.rows_dirty = true;
         self.persist();
     }
 
@@ -651,9 +684,18 @@ impl TermWindow {
             Some(window) => window.clone(),
             None => return,
         };
+        let interval = if self.explorer.context_request_in_flight
+            || self.explorer.git_status_request_in_flight
+            || self.explorer.codex_status_request_in_flight
+            || !self.explorer.pending_directories.is_empty()
+        {
+            SERVICE_POLL_INTERVAL
+        } else {
+            SERVICE_IDLE_POLL_INTERVAL
+        };
         self.explorer.tick_scheduled = true;
         promise::spawn::spawn(async move {
-            smol::Timer::after(SERVICE_POLL_INTERVAL).await;
+            smol::Timer::after(interval).await;
             window.notify(TermWindowNotif::ExplorerTick);
         })
         .detach();
@@ -666,7 +708,9 @@ impl TermWindow {
             match response {
                 ServiceResponse::DirectoryListed(listing) => {
                     self.explorer.pending_directories.remove(&listing.path);
-                    changed |= self.explorer.cache.apply(listing);
+                    let listing_changed = self.explorer.cache.apply(listing);
+                    self.explorer.rows_dirty |= listing_changed;
+                    changed |= listing_changed;
                     // A newly loaded parent can expose persisted expanded
                     // descendants. Queue only those not already cached; do
                     // not rescan the tree from paint or context polling.
@@ -705,9 +749,11 @@ impl TermWindow {
                 }
                 ServiceResponse::DirectoryChanged(paths) => {
                     self.explorer.refresh_changed_paths(paths);
+                    self.explorer.request_git_status();
                 }
                 ServiceResponse::WatcherError(error) => {
                     self.explorer.last_error = Some(error);
+                    self.explorer.rows_dirty = true;
                     changed = true;
                 }
             }
@@ -723,7 +769,8 @@ impl TermWindow {
             self.explorer.last_directory_refresh = now;
             self.explorer.refresh_expanded_directories();
         }
-        if now.duration_since(self.explorer.last_git_status_refresh) >= DIRECTORY_REFRESH_INTERVAL {
+        if now.duration_since(self.explorer.last_git_status_refresh) >= GIT_STATUS_REFRESH_INTERVAL
+        {
             self.explorer.last_git_status_refresh = now;
             self.explorer.request_git_status();
         }
@@ -791,6 +838,7 @@ impl TermWindow {
     pub fn focus_explorer(&mut self) {
         self.explorer.state.visible = true;
         self.explorer.focused = true;
+        self.explorer.rows_dirty = true;
         if self.explorer.selected_path.is_none() {
             self.explorer.selected_path = self
                 .explorer
@@ -806,6 +854,7 @@ impl TermWindow {
     pub fn blur_explorer(&mut self) {
         if self.explorer.focused {
             self.explorer.focused = false;
+            self.explorer.rows_dirty = true;
             if let Some(window) = self.window.as_ref() {
                 window.invalidate();
             }
@@ -827,6 +876,7 @@ impl TermWindow {
     pub fn toggle_explorer_hidden_files(&mut self) {
         self.explorer.state.show_hidden = !self.explorer.state.show_hidden;
         self.explorer.cache.clear();
+        self.explorer.rows_dirty = true;
         self.explorer.pending_directories.clear();
         self.explorer.ensure_expanded_directories();
         self.explorer.persist();
@@ -843,6 +893,7 @@ impl TermWindow {
         if let Some(removed) = self.explorer.state.remove_root(index) {
             self.explorer.selected_path = None;
             self.explorer.selected_root = None;
+            self.explorer.rows_dirty = true;
             if self
                 .explorer
                 .display_root
@@ -888,6 +939,7 @@ impl TermWindow {
                         "Workspace root is not a directory: {}",
                         path.display()
                     ));
+                    self.explorer.rows_dirty = true;
                     if let Some(window) = self.window.as_ref() {
                         window.invalidate();
                     }
@@ -897,6 +949,7 @@ impl TermWindow {
                 self.explorer.state.follow_mode = FollowMode::Follow;
                 self.explorer.selected_path = Some(path);
                 self.explorer.selected_root = Some(index);
+                self.explorer.rows_dirty = true;
                 self.explorer.persist();
             }
             ExplorerPromptKind::RenameRoot(index) => {
@@ -907,6 +960,7 @@ impl TermWindow {
                 ) {
                     if displayed.path == root.path {
                         displayed.name = root.name.clone();
+                        self.explorer.rows_dirty = true;
                     }
                 }
                 self.explorer.persist();
@@ -1080,10 +1134,14 @@ impl TermWindow {
         if bold {
             attributes.weight = FontWeight::BOLD;
         }
-        let font = self.fonts.resolve_font(&TextStyle {
+        let style = TextStyle {
             font: vec![attributes],
             foreground: None,
-        })?;
+        };
+        let font = self
+            .fonts
+            .resolve_built_in_font(&style)
+            .or_else(|_| self.fonts.resolve_font(&style))?;
         let render_metrics = RenderMetrics::with_font_metrics(&font.metrics());
         let top = (top + ((height - render_metrics.cell_size.height as f32) / 2.).max(0.)).round();
         let left = left.round();

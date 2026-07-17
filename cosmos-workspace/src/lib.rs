@@ -20,6 +20,7 @@ pub const MAX_DIRECTORY_ENTRIES: usize = 5_000;
 const CODEX_ROLLOUT_INITIAL_TAIL_BYTES: u64 = 512 * 1024;
 const CODEX_ROLLOUT_MAX_TAIL_BYTES: u64 = 8 * 1024 * 1024;
 const CODEX_ROLLOUT_DISCOVERY_INTERVAL: Duration = Duration::from_secs(15);
+const CODEX_ROLLOUT_CANDIDATE_LIMIT: usize = 16;
 
 #[derive(Deserialize)]
 struct CloseLockCredential {
@@ -927,7 +928,7 @@ impl CodexStatusReader {
             return self.snapshot.clone();
         }
         self.observed_head = head;
-        for (modified, path) in rollouts.into_iter().take(16) {
+        for (modified, path) in rollouts.into_iter().take(CODEX_ROLLOUT_CANDIDATE_LIMIT) {
             if let Some((primary, secondary, total_tokens)) = read_latest_codex_token_count(&path) {
                 self.snapshot.primary = primary;
                 self.snapshot.secondary = secondary;
@@ -945,7 +946,7 @@ impl CodexStatusReader {
 
 fn newest_rollout_paths(root: &Path) -> Vec<(SystemTime, PathBuf)> {
     let mut stack = vec![root.to_path_buf()];
-    let mut rollouts = Vec::new();
+    let mut rollouts = Vec::with_capacity(CODEX_ROLLOUT_CANDIDATE_LIMIT);
     while let Some(directory) = stack.pop() {
         let entries = match fs::read_dir(directory) {
             Ok(entries) => entries,
@@ -968,7 +969,18 @@ fn newest_rollout_paths(root: &Path) -> Vec<(SystemTime, PathBuf)> {
                 .metadata()
                 .and_then(|metadata| metadata.modified())
                 .unwrap_or(UNIX_EPOCH);
-            rollouts.push((modified, path));
+            let candidate = (modified, path);
+            if rollouts.len() < CODEX_ROLLOUT_CANDIDATE_LIMIT {
+                rollouts.push(candidate);
+            } else if let Some((oldest_index, oldest)) = rollouts
+                .iter()
+                .enumerate()
+                .min_by_key(|(_, (modified, _))| *modified)
+            {
+                if candidate.0 > oldest.0 {
+                    rollouts[oldest_index] = candidate;
+                }
+            }
         }
     }
     rollouts.sort_by(|left, right| right.0.cmp(&left.0));
@@ -1052,19 +1064,19 @@ fn codex_loop_count() -> usize {
         return 0;
     }
     pids.truncate((count as usize).min(pids.len()));
-    pids.into_iter()
-        .filter(|pid| {
-            let mut buffer = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
-            let length = unsafe {
-                libc::proc_pidpath(*pid, buffer.as_mut_ptr() as *mut _, buffer.len() as u32)
-            };
-            if length <= 0 {
-                return false;
-            }
-            buffer.truncate(length as usize);
-            is_codex_loop_executable(Path::new(OsStr::from_bytes(&buffer)))
-        })
-        .count()
+    let mut buffer = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+    let mut active = 0;
+    for pid in pids {
+        let length =
+            unsafe { libc::proc_pidpath(pid, buffer.as_mut_ptr() as *mut _, buffer.len() as u32) };
+        if length <= 0 {
+            continue;
+        }
+        if is_codex_loop_executable(Path::new(OsStr::from_bytes(&buffer[..length as usize]))) {
+            active += 1;
+        }
+    }
+    active
 }
 
 #[cfg(target_os = "macos")]
@@ -1502,6 +1514,21 @@ mod tests {
             })
         );
         assert_eq!(total_tokens, Some(217_947_530));
+    }
+
+    #[test]
+    fn codex_rollout_discovery_keeps_only_bounded_candidates() {
+        let root = temporary_path("codex-rollouts");
+        fs::create_dir_all(&root).unwrap();
+        for index in 0..(CODEX_ROLLOUT_CANDIDATE_LIMIT + 9) {
+            fs::write(root.join(format!("rollout-{index:02}.jsonl")), b"{}\n").unwrap();
+        }
+
+        let rollouts = newest_rollout_paths(&root);
+        assert_eq!(rollouts.len(), CODEX_ROLLOUT_CANDIDATE_LIMIT);
+        assert!(rollouts.windows(2).all(|pair| pair[0].0 >= pair[1].0));
+
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

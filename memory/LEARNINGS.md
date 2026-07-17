@@ -32,6 +32,12 @@
   system-font alias, but its FreeType parser can register the OS-owned
   `/System/Library/Fonts/SFNS.ttf` face as `System Font` without redistributing
   it.
+- Do not send an explicitly registered UI font through the generic platform
+  locator. On macOS that path can enumerate and parse the complete CoreText
+  catalog for every size/weight variant, producing a nearly 1 GiB transient
+  startup peak. Resolve known built-in faces directly, retain the normal font
+  cache and cap-height scaling, and fall back to platform lookup only when the
+  face is not registered.
 - For exact VS Code file icons, embed Code OSS's Seti font and retain its MIT
   license; visually similar Nerd Font glyphs use different outlines and
   codepoints. Keep Git status invocation on its own worker and parse
@@ -63,6 +69,11 @@
   work and make input feel laggy. Keep worker-response polling faster than pane
   context polling, and use `CachePolicy::AllowStale` so process discovery never
   stalls the UI thread.
+- Cache generated Explorer rows and invalidate them only for visual state
+  changes. Use a fast service-response interval only while work is pending,
+  back off while idle, and let watcher events drive directory and Git updates
+  with a slow periodic fallback. Reapplying unchanged pane context or Git
+  state at timer frequency is avoidable idle CPU.
 - A custom `Command+W` assignment bypasses WezTerm's window-close
   confirmation. Wrap `CloseCurrentTab` in the close-lock verifier and
   pre-close autosave callback when destructive tab closure must require the
@@ -78,6 +89,8 @@
   session discovery, and use native process enumeration with an exact `codex`
   executable-basename match. This keeps multi-gigabyte session histories and
   similarly named helper processes from making the UI noisy or inaccurate.
+  Keep rollout candidates bounded and reuse the macOS process-path buffer
+  across PIDs so each two-second count does not allocate once per process.
 - Canvas-drawn explorer focus must be released explicitly when a terminal pane
   is clicked. Native window focus alone does not identify which in-window
   region owns keyboard events; without the handoff, `.` and Return can trigger

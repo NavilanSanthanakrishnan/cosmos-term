@@ -28,6 +28,31 @@ Confirm that the bundle contains `cosmos-term-gui`, `cosmos-term`, and
 `cosmos-term-mux-server`, and that the plist reports
 `com.navilan.cosmos-term`.
 
+## Performance regression
+
+Measure a fresh Finder-style launch with the same CWD, window geometry,
+display, and settling time used for a fresh WezTerm comparison:
+
+```sh
+footprint <pid>
+vmmap -summary <pid>
+top -l 30 -s 1 -pid <pid> -stats pid,cpu,mem,command
+sample <pid> 12 1 -file /tmp/cosmos-cpu-sample.txt
+```
+
+On the 2026-07-17 reference Mac, the pre-optimization Cosmos build reached a
+954–956 MiB physical-footprint peak and averaged 1.21% idle CPU. The optimized
+installed bundle measured 81.8 MiB current footprint, 237.6 MiB peak, and
+0.48% average idle CPU across 30 steady-state samples. A matched fresh WezTerm
+launch measured 56.8 MiB current, 137.1 MiB peak, and 0.54% average idle CPU.
+Treat these as machine-specific reference values: regressions should be judged
+against a matched launch rather than a universal absolute threshold.
+
+The high-water check must not show hundreds of MiB retained in empty
+`MALLOC_SMALL` regions. A native sample should show the Cosmos worker threads
+blocked on their channels between requests, with no persistent font-catalog
+enumeration, directory scan from paint, or external status helper.
+
 The old `glium` dependency must retain its package-specific release
 `opt-level = 0` for compatibility. The bundled Cosmos config intentionally
 selects WebGPU because its sRGB surface preserves VS Code theme values on both
