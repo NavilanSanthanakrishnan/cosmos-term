@@ -460,6 +460,9 @@ pub struct PromptInputLine {
     /// Descriptive text to show ahead of prompt
     #[dynamic(default)]
     pub description: String,
+    /// Conceal the entered value while retaining it for the action callback.
+    #[dynamic(default)]
+    pub password: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]

@@ -73,6 +73,8 @@ keyboard focus to the terminal.
 then permanently closes the current tab and every process in its panes.
 Canceling or entering the wrong passphrase leaves the tab untouched.
 `Command+Q` applies the same protected autosave flow to the whole application.
+The password prompt is rendered and masked inside Cosmos Term; it no longer
+opens a `tmux Manager` dialog or notification.
 
 ## Codex status
 

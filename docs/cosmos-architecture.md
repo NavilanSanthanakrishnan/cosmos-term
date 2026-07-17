@@ -130,6 +130,26 @@ executable basename of exactly `codex`. Processes such as
 `codex-code-mode-host` are excluded. This design does not spawn `ps`, `pgrep`,
 Codex CLI calls, a daemon, or any persistent status helper.
 
+## Protected close
+
+`Command+W` and `Command+Q` use the native `PromptInputLine` overlay with
+password concealment. The overlay renders one bullet per entered character,
+disables line-editor paths that could repaint the source value, and returns
+the original value only to the action callback. Escape cancels immediately
+without a notification.
+
+Cosmos verifies the existing tmux-manager close-lock credential in-process
+using PBKDF2-HMAC-SHA256 and constant-time comparison. It does not launch the
+tmux-manager AppleScript prompt, put the password in process arguments, or log
+the entered value. After successful verification, the existing tmux-manager
+autosave runs before the requested close. Any user-facing failure message is
+branded `Cosmos Term`.
+
+The synthetic terminal used by this overlay identifies itself as
+`Cosmos Term`. Terminal state now derives its initial title from the supplied
+terminal-program identity instead of a fixed `wezterm` string, and removing an
+overlay refreshes the restored pane title.
+
 ## Current-folder policy
 
 The Explorer is permanently enabled and always follows the active pane's exact
