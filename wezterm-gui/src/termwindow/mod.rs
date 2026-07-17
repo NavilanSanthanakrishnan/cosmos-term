@@ -852,7 +852,7 @@ impl TermWindow {
             let mut myself = tw.borrow_mut();
             let webgpu = match config.front_end {
                 FrontEndSelection::WebGpu => Some(Rc::new(
-                    WebGpuState::new(&window, dimensions, &config).await?,
+                    WebGpuState::new(&window, myself.dimensions, &config).await?,
                 )),
                 _ => None,
             };
@@ -883,6 +883,41 @@ impl TermWindow {
             }
             myself.load_os_parameters();
             window.show();
+            // Cocoa can apply the last screen placement only when the window
+            // becomes visible. Re-apply the mux-requested cell geometry on the
+            // next window event, using the DPI reported by that actual screen,
+            // so mixed-DPI launches cannot leave a 2x frame or mismatched
+            // WebGPU surface behind.
+            if terminal_size.rows > 0 && terminal_size.cols > 0 {
+                let window_for_normalize = window.clone();
+                promise::spawn::spawn(async move {
+                    // Let Cocoa finish assigning the native screen before
+                    // undoing a transient zoom and applying the intended cell
+                    // geometry. The second delay lets the unzoom animation
+                    // settle before setContentSize runs.
+                    Timer::after(Duration::from_millis(300)).await;
+                    window_for_normalize.restore();
+                    Timer::after(Duration::from_millis(300)).await;
+
+                    let window_for_resize = window_for_normalize.clone();
+                    window_for_normalize.notify(TermWindowNotif::Apply(Box::new(
+                        move |term_window| {
+                            let mut requested_size = terminal_size;
+                            requested_size.dpi = term_window.dimensions.dpi as u32;
+                            // `NSWindow::isZoomed` can transiently report true
+                            // while Cocoa moves a new window between screens.
+                            term_window.window_state -= WindowState::MAXIMIZED;
+                            if let Err(err) =
+                                term_window.set_window_size(requested_size, &window_for_resize)
+                            {
+                                log::error!("normalize initial window size: {err:#}");
+                            }
+                            window_for_resize.invalidate();
+                        },
+                    )));
+                })
+                .detach();
+            }
             myself.subscribe_to_pane_updates();
             myself.schedule_explorer_tick();
             myself.emit_window_event("window-config-reloaded", None);

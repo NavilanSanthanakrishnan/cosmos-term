@@ -47,6 +47,12 @@
   previews can hide DPI and color-profile errors. On this macOS baseline,
   WebGPU's sRGB surface emits the VS Code `#252526` sidebar value exactly,
   while the legacy OpenGL path visibly lifts it on wide-gamut displays.
+- On mixed-DPI macOS setups, provisional pixel geometry can be interpreted as
+  AppKit points before Cocoa assigns the final screen, and `isZoomed` can be
+  transiently true during that placement. Use the active screen DPI for the
+  initial pixel-to-point conversion, then reconcile the requested terminal
+  cells after native placement/unzoom settles and invalidate the resized
+  WebGPU surface.
 - Queue the active display root before any expanded descendants. Derive later
   requests from directories reachable through the currently rendered tree so
   an unavailable stale expansion cannot block the current CWD.
