@@ -10,12 +10,14 @@ use termwiz::terminal::Terminal;
 
 struct PromptHost {
     history: BasicHistory,
+    password: bool,
 }
 
 impl PromptHost {
-    fn new() -> Self {
+    fn new(password: bool) -> Self {
         Self {
             history: BasicHistory::default(),
+            password,
         }
     }
 }
@@ -25,22 +27,44 @@ impl LineEditorHost for PromptHost {
         &mut self.history
     }
 
+    fn highlight_line(&self, line: &str, cursor_position: usize) -> (Vec<OutputElement>, usize) {
+        if !self.password {
+            let cursor_x_pos = termwiz::cell::unicode_column_width(&line[0..cursor_position], None);
+            return (vec![OutputElement::Text(line.to_owned())], cursor_x_pos);
+        }
+
+        let masked = "•".repeat(line.chars().count());
+        let cursor_x_pos = line[0..cursor_position].chars().count();
+        (vec![OutputElement::Text(masked)], cursor_x_pos)
+    }
+
     fn resolve_action(
         &mut self,
         event: &InputEvent,
         editor: &mut LineEditor<'_>,
     ) -> Option<Action> {
         let (line, _cursor) = editor.get_line_and_cursor();
-        if line.is_empty()
+        if matches!(
+            event,
+            InputEvent::Key(KeyEvent {
+                key: KeyCode::Escape,
+                ..
+            })
+        ) && (self.password || line.is_empty())
+        {
+            Some(Action::Cancel)
+        } else if self.password
             && matches!(
                 event,
                 InputEvent::Key(KeyEvent {
-                    key: KeyCode::Escape,
-                    ..
+                    key: KeyCode::Char('R') | KeyCode::Char('S'),
+                    modifiers: termwiz::input::Modifiers::CTRL,
                 })
             )
         {
-            Some(Action::Cancel)
+            // Incremental-search rendering includes the source line. Disable
+            // it for concealed prompts so the secret can never be repainted.
+            Some(Action::NoAction)
         } else {
             None
         }
@@ -65,7 +89,7 @@ pub fn show_line_prompt_overlay(
     text.push_str("\r\n");
     term.render(&[Change::Text(text)])?;
 
-    let mut host = PromptHost::new();
+    let mut host = PromptHost::new(args.password);
     let mut editor = LineEditor::new(&mut term);
     editor.set_prompt("> ");
     let line = editor.read_line(&mut host)?;

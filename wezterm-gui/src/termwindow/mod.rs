@@ -3472,8 +3472,14 @@ impl TermWindow {
                 return;
             }
         }
-        if let Some(overlay) = self.tab_state(tab_id).overlay.take() {
+        let removed = if let Some(overlay) = self.tab_state(tab_id).overlay.take() {
             Mux::get().remove_pane(overlay.pane.pane_id());
+            true
+        } else {
+            false
+        };
+        if removed {
+            self.update_title();
         }
         if let Some(window) = self.window.as_ref() {
             window.invalidate();
@@ -3485,7 +3491,7 @@ impl TermWindow {
     }
 
     fn cancel_overlay_for_pane(&mut self, pane_id: PaneId) {
-        if let Some(overlay) = self.pane_state(pane_id).overlay.take() {
+        let removed = if let Some(overlay) = self.pane_state(pane_id).overlay.take() {
             // Ungh, when I built the CopyOverlay, its pane doesn't get
             // added to the mux and instead it reports the overlaid
             // pane id.  Take care to avoid killing ourselves off
@@ -3493,6 +3499,12 @@ impl TermWindow {
             if pane_id != overlay.pane.pane_id() {
                 Mux::get().remove_pane(overlay.pane.pane_id());
             }
+            true
+        } else {
+            false
+        };
+        if removed {
+            self.update_title();
         }
         if let Some(window) = self.window.as_ref() {
             window.invalidate();

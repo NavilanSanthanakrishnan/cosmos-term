@@ -7,6 +7,7 @@ use config::{DeferredKeyCode, GpuInfo, Key, KeyNoAction};
 use luahelper::dynamic_to_lua_value;
 use mux::window::WindowId as MuxWindowId;
 use std::collections::HashMap;
+use std::path::Path;
 use wezterm_dynamic::ToDynamic;
 
 pub mod guiwin;
@@ -53,6 +54,14 @@ pub fn register(lua: &Lua) -> anyhow::Result<()> {
             let fe =
                 try_front_end().ok_or_else(|| mlua::Error::external("not called on gui thread"))?;
             Ok(fe.gui_windows())
+        })?,
+    )?;
+
+    window_mod.set(
+        "verify_close_lock",
+        lua.create_function(|_, (path, passphrase): (String, String)| {
+            cosmos_workspace::verify_close_lock(Path::new(&path), &passphrase)
+                .map_err(mlua::Error::external)
         })?,
     )?;
 

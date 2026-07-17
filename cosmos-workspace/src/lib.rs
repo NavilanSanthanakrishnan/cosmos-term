@@ -1,8 +1,12 @@
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use base64::Engine;
+use ring::pbkdf2;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::ffi::OsStr;
 use std::fs::{self, File};
 use std::io::{self, Read, Seek, SeekFrom};
+use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -16,6 +20,53 @@ pub const MAX_DIRECTORY_ENTRIES: usize = 5_000;
 const CODEX_ROLLOUT_INITIAL_TAIL_BYTES: u64 = 512 * 1024;
 const CODEX_ROLLOUT_MAX_TAIL_BYTES: u64 = 8 * 1024 * 1024;
 const CODEX_ROLLOUT_DISCOVERY_INTERVAL: Duration = Duration::from_secs(15);
+
+#[derive(Deserialize)]
+struct CloseLockCredential {
+    kdf: String,
+    iterations: u32,
+    salt: String,
+    digest: String,
+}
+
+pub fn verify_close_lock(path: &Path, passphrase: &str) -> io::Result<bool> {
+    let data = fs::read(path)?;
+    verify_close_lock_credential(&data, passphrase)
+}
+
+fn verify_close_lock_credential(data: &[u8], passphrase: &str) -> io::Result<bool> {
+    if passphrase.is_empty() {
+        return Ok(false);
+    }
+    let credential: CloseLockCredential = serde_json::from_slice(data)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    if credential.kdf != "pbkdf2-hmac-sha256" {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "unsupported close-lock credential",
+        ));
+    }
+    let iterations = NonZeroU32::new(credential.iterations).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "close-lock iterations must be nonzero",
+        )
+    })?;
+    let salt = BASE64_STANDARD
+        .decode(credential.salt)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    let expected = BASE64_STANDARD
+        .decode(credential.digest)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    Ok(pbkdf2::verify(
+        pbkdf2::PBKDF2_HMAC_SHA256,
+        iterations,
+        &salt,
+        passphrase.as_bytes(),
+        &expected,
+    )
+    .is_ok())
+}
 
 fn default_true() -> bool {
     true
@@ -1206,6 +1257,33 @@ impl Default for WorkspaceService {
 mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn verifies_tmux_manager_close_lock_credentials() {
+        let passphrase = "cosmos-test-passphrase";
+        let salt = b"cosmos-test-salt";
+        let iterations = NonZeroU32::new(10).unwrap();
+        let mut digest = [0u8; 32];
+        pbkdf2::derive(
+            pbkdf2::PBKDF2_HMAC_SHA256,
+            iterations,
+            salt,
+            passphrase.as_bytes(),
+            &mut digest,
+        );
+        let credential = serde_json::to_vec(&serde_json::json!({
+            "format_version": 1,
+            "kdf": "pbkdf2-hmac-sha256",
+            "iterations": iterations.get(),
+            "salt": BASE64_STANDARD.encode(salt),
+            "digest": BASE64_STANDARD.encode(digest),
+        }))
+        .unwrap();
+
+        assert!(verify_close_lock_credential(&credential, passphrase).unwrap());
+        assert!(!verify_close_lock_credential(&credential, "incorrect").unwrap());
+        assert!(!verify_close_lock_credential(&credential, "").unwrap());
+    }
 
     fn temporary_path(name: &str) -> PathBuf {
         let nonce = SystemTime::now()

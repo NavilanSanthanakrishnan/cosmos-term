@@ -1,6 +1,6 @@
 # Cosmos Term Session Handoff
 
-Updated: 2026-07-16
+Updated: 2026-07-17
 
 ## Current state
 
@@ -77,10 +77,20 @@ explorer and using independent application/runtime identities.
   redirect Cosmos Term; its bundled config and Cosmos socket are used.
 - Parent `WEZTERM_*` protocol/config variables and stale `TMUX`/`TMUX_PANE`
   attachment values are absent from newly spawned Cosmos terminal shells.
-- `Command+W` uses the custom close-lock verifier and pre-close autosave before
-  permanently closing the current tab and all of its panes. Canceling or
-  failing verification blocks the close. `Command+Q` retains the equivalent
-  protected whole-application autosave/close flow.
+- `Command+W` opens a password-masked `COSMOS TERM CLOSE LOCK` overlay, verifies
+  the existing PBKDF2-HMAC-SHA256 close-lock credential in-process, and runs
+  the pre-close autosave before permanently closing the current tab and all of
+  its panes. Escape or failed verification blocks the close. The password is
+  not logged or passed through process arguments. `Command+Q` retains the
+  equivalent protected whole-application autosave/close flow.
+- The external tmux-manager AppleScript dialog and `tmux Manager` notification
+  identity are no longer used. Canceling is silent; any failure toast is
+  branded `Cosmos Term`. Overlay cancellation also restores the underlying
+  pane title.
+- Live cancellation was verified after typing a masked value. The complete
+  success path was verified with a temporary PBKDF2 credential, dedicated tmux
+  socket, and isolated manager state: the workspace snapshot was written and
+  the disposable tab/app closed. The temporary server and state were removed.
 - The exact protected-close state before footer work is retained at annotated
   tag `backup/command-w-protected-2026-07-16` (commit `7abaf9cae`).
 - A native 22 logical-pixel status bar now reserves real space below both the
@@ -101,11 +111,11 @@ explorer and using independent application/runtime identities.
   layout migration are covered as well. Structured Codex usage parsing,
   nearest-reset selection, and executable-name filtering are also covered.
 - The final installed `cosmos-term-gui` SHA-256 is
-  `15fc41f77db41e8c28cd37173d99d51ff7c20f18984b478e92f6c06544711915`;
+  `1dd6187a8898887713666b4d5c63a08741cf4f9fff342038a02790ec389f3e37`;
   it exactly matches the packaged release binary.
-  The final native status capture is
-  `/tmp/cosmos-visual/cosmos-codex-status-final.png`
-  (`623cec8acf04326d0a2a808628e6637ec59b480d81b6258b9e01ca52180ddaf0`,
+  The final native close-lock capture is
+  `/tmp/cosmos-visual/cosmos-close-lock-final.png`
+  (`5d38d0c72f9ad7e7c97f95b2449148b9d3fd691fd751107d7507864e64b523dd`,
   2486 × 1702 at Retina resolution).
 
 ## Verification commands

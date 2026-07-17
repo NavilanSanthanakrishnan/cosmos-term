@@ -67,6 +67,12 @@
   confirmation. Wrap `CloseCurrentTab` in the close-lock verifier and
   pre-close autosave callback when destructive tab closure must require the
   same custom passphrase as `Command+Q`.
+- Do not delegate a product-owned password prompt to an AppleScript helper:
+  macOS exposes the helper's name in the dialog and notifications. A concealed
+  in-app prompt plus in-process PBKDF2 verification keeps the close password
+  out of process arguments, logs, line history, and external app identity.
+  Canceling an overlay must also refresh the window title from the restored
+  pane.
 - A live Codex footer does not need a daemon or CLI subprocess. Read only
   structured `token_count` lines from the changed rollout tail, cache broader
   session discovery, and use native process enumeration with an exact `codex`
