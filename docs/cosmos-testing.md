@@ -35,7 +35,7 @@ both 72 and 144 DPI.
 
 On a mixed-DPI Mac, launch from both the standard and Retina screens. After
 Cocoa completes placement, the window must settle to the configured 100 × 32
-terminal geometry plus the 420 logical-pixel Explorer. Type into the terminal
+terminal geometry plus the 520 logical-pixel Explorer. Type into the terminal
 and move the window between screens; it must not re-expand, retain stale
 WebGPU quads, or change the Explorer's apparent scale.
 
@@ -94,9 +94,13 @@ Use only panes created in Cosmos Term.
 12. Press `Command+W` and confirm the current tab closes immediately without a
     confirmation dialog.
 13. Capture native window screenshots on 72 DPI and 144 DPI displays. Confirm
-    the Explorer remains 420 logical pixels wide with a 35 px title, 22 px
+    the Explorer remains 520 logical pixels wide with a 35 px title, 22 px
     rows, 11/13 px text, and exact `#252526` background and `#37373D` inactive
     selection pixels on the 72 DPI reference display.
+14. While the terminal repaints under rapid input, confirm cached expanded
+    directories are not re-read. Expand an uncached folder and confirm its
+    worker result appears on the 50 ms service-response cycle; watcher and
+    periodic refreshes must remain the only background rescan paths.
 
 ## Isolated tmux matrix
 

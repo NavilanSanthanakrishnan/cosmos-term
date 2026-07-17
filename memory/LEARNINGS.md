@@ -56,6 +56,13 @@
 - Queue the active display root before any expanded descendants. Derive later
   requests from directories reachable through the currently rendered tree so
   an unavailable stale expansion cannot block the current CWD.
+- Never queue directory reads from the Explorer paint path. Gate initial
+  requests on cache presence, explicitly force only watcher/periodic/user
+  refreshes, and queue newly reachable persisted descendants when a parent
+  listing arrives. Otherwise every terminal repaint can trigger filesystem
+  work and make input feel laggy. Keep worker-response polling faster than pane
+  context polling, and use `CachePolicy::AllowStale` so process discovery never
+  stalls the UI thread.
 - Normal tab close should remain independent from whole-application protection:
   bind `Command+W` directly to `CloseCurrentTab`, and reserve close-lock plus
   autosave for `Command+Q`.
