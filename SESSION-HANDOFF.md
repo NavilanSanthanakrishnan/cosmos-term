@@ -77,9 +77,10 @@ explorer and using independent application/runtime identities.
   redirect Cosmos Term; its bundled config and Cosmos socket are used.
 - Parent `WEZTERM_*` protocol/config variables and stale `TMUX`/`TMUX_PANE`
   attachment values are absent from newly spawned Cosmos terminal shells.
-- `Command+W` is a direct, unconfirmed `CloseCurrentTab`; a live two-tab test
-  and repeated live single-tab tests closed immediately. `Command+Q` retains
-  protected autosave/close.
+- `Command+W` uses the custom close-lock verifier and pre-close autosave before
+  permanently closing the current tab and all of its panes. Canceling or
+  failing verification blocks the close. `Command+Q` retains the equivalent
+  protected whole-application autosave/close flow.
 - Folder-scoped row generation has unit coverage for excluding both saved
   sibling roots and parent-directory siblings; Git porcelain parsing and
   layout migration are covered as well.

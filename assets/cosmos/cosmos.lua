@@ -54,8 +54,9 @@ local function protected_save_then(action)
 end
 
 -- Title-bar/window-manager closes still receive the built-in confirmation.
--- Command+W is the standard immediate tab close. Command+Q retains the
--- protected autosave flow for closing the whole application.
+-- Command+W permanently closes the current tab and all of its panes only
+-- after the custom close-lock succeeds and the workspace has been saved.
+-- Command+Q applies the same protection to the whole application.
 config.window_close_confirmation = 'AlwaysPrompt'
 
 -- Send Shift+Backspace as a distinct xterm modified-key sequence so tmux can
@@ -69,7 +70,7 @@ config.keys = {
   {
     key = 'w',
     mods = 'SUPER',
-    action = act.CloseCurrentTab { confirm = false },
+    action = protected_save_then(act.CloseCurrentTab { confirm = false }),
   },
   {
     -- The explorer is a permanent workbench region. Consume the legacy

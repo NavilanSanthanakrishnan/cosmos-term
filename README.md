@@ -67,8 +67,10 @@ There is no Explorer hide or lock key binding. In particular, `L`, `F`, and
 `P` remain normal terminal input. Clicking a terminal pane immediately returns
 keyboard focus to the terminal.
 
-`Command+W` closes the current tab immediately. `Command+Q` keeps the
-protected whole-application autosave flow.
+`Command+W` asks for the custom close-lock passphrase, saves the workspace,
+then permanently closes the current tab and every process in its panes.
+Canceling or entering the wrong passphrase leaves the tab untouched.
+`Command+Q` applies the same protected autosave flow to the whole application.
 
 ## Isolation from WezTerm
 

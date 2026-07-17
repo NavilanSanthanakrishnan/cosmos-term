@@ -51,7 +51,7 @@ env \
 ```
 
 The command must load the bundled Cosmos config, list `Command+Shift+E` as
-`Nop`, list `Command+W` as unconfirmed `CloseCurrentTab`, and contain no key
+`Nop`, list `Command+W` as a custom event callback, and contain no key
 assignment that hides, locks, or changes Explorer scope. It must not require or
 connect to WezTerm.
 
@@ -91,8 +91,10 @@ Use only panes created in Cosmos Term.
     reaches the shell.
 11. In a Git worktree, modify a visible file and confirm a right-aligned `M`
     appears and refreshes without blocking terminal input.
-12. Press `Command+W` and confirm the current tab closes immediately without a
-    confirmation dialog.
+12. Press `Command+W` and confirm that the hidden close-lock passphrase dialog
+    appears. Cancel it and confirm the tab and its processes remain intact.
+    In a disposable test tab, enter the correct passphrase and confirm the
+    workspace is saved before the tab and all of its panes close.
 13. Capture native window screenshots on 72 DPI and 144 DPI displays. Confirm
     the Explorer remains 520 logical pixels wide with a 35 px title, 22 px
     rows, 13/15 px text, and exact `#252526` background and `#37373D` inactive
