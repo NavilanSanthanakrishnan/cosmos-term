@@ -125,7 +125,7 @@ explorer and using independent application/runtime identities.
   layout migration are covered as well. Structured Codex usage parsing,
   nearest-reset selection, and executable-name filtering are also covered.
 - The final installed `cosmos-term-gui` SHA-256 is
-  `e038f25df24029f4ad3fce91a58c44156fcb73f6fd3c03914832d9f740753075`;
+  `b1f533b3462ab7681efc03a00a7813fb26799f0f7f8ca7fc84e2d38455472369`;
   it exactly matches the packaged release binary.
   The final native close-lock capture is
   `/tmp/cosmos-visual/cosmos-close-lock-final.png`
