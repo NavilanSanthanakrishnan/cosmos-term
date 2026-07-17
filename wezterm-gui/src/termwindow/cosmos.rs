@@ -50,6 +50,7 @@ const EXPLORER_UI_FONT_FAMILY: &str = "System Font";
 #[cfg(not(target_os = "macos"))]
 const EXPLORER_UI_FONT_FAMILY: &str = "Helvetica Neue";
 const VIRTUAL_ROOT_INDEX: usize = usize::MAX;
+const SERVICE_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const CONTEXT_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const DIRECTORY_REFRESH_INTERVAL: Duration = Duration::from_secs(2);
 
@@ -206,11 +207,12 @@ pub struct ExplorerUi {
 impl ExplorerUi {
     pub fn load() -> Self {
         let state_path = config::DATA_DIR.join("workspace-state.json");
-        let (mut state, last_error) = match ExplorerState::load(&state_path) {
-            Ok(state) => (state, None),
+        let (mut state, mut last_error, state_loaded) = match ExplorerState::load(&state_path) {
+            Ok(state) => (state, None, true),
             Err(err) => (
                 ExplorerState::default(),
                 Some(format!("Unable to load explorer state: {err}")),
+                false,
             ),
         };
         // The explorer is a permanent part of the Cosmos workbench. Keep the
@@ -223,6 +225,13 @@ impl ExplorerUi {
         // Wait for the active pane context instead of flashing a stale saved
         // root from an unrelated prior shell directory.
         let display_root = None;
+        // Persist layout migrations and the permanent-view invariants now, so
+        // they do not depend on a later context change or divider drag.
+        if state_loaded {
+            if let Err(err) = state.save(&state_path) {
+                last_error = Some(format!("Unable to save explorer state: {err}"));
+            }
+        }
         Self {
             state,
             state_path,
@@ -264,14 +273,17 @@ impl ExplorerUi {
         }
     }
 
-    fn request_directory(&mut self, path: PathBuf) {
+    fn request_directory(&mut self, path: PathBuf, refresh: bool) {
+        if !refresh && self.cache.is_loaded(&path) {
+            return;
+        }
         if self.pending_directories.insert(path.clone()) {
             self.cache.mark_loading(path.clone());
             self.service.list_directory(path, self.state.show_hidden);
         }
     }
 
-    fn request_expanded_directories(&mut self) {
+    fn sync_expanded_directories(&mut self, refresh: bool) {
         let root = match self.display_root.as_ref() {
             Some(root) => root,
             None => {
@@ -313,12 +325,16 @@ impl ExplorerUi {
             self.service.watch_directories(expanded.clone());
         }
         for path in ordered {
-            self.request_directory(path);
+            self.request_directory(path, refresh);
         }
     }
 
+    fn ensure_expanded_directories(&mut self) {
+        self.sync_expanded_directories(false);
+    }
+
     fn refresh_expanded_directories(&mut self) {
-        self.request_expanded_directories();
+        self.sync_expanded_directories(true);
     }
 
     fn request_git_status(&mut self) {
@@ -344,7 +360,7 @@ impl ExplorerUi {
             }
         }
         for directory in directories {
-            self.request_directory(directory);
+            self.request_directory(directory, true);
         }
     }
 
@@ -376,7 +392,7 @@ impl ExplorerUi {
             self.git_statuses.clear();
         }
         self.selected_root = self.exact_root_index(&path);
-        self.request_expanded_directories();
+        self.ensure_expanded_directories();
         self.request_git_status();
         changed || expanded
     }
@@ -400,7 +416,6 @@ impl ExplorerUi {
             if root_changed || !self.focused {
                 self.selected_path = Some(cwd);
             }
-            self.request_expanded_directories();
             if self.state != prior_state {
                 self.persist();
                 changed = true;
@@ -506,7 +521,7 @@ impl ExplorerUi {
             self.scroll = self.scroll.min(index);
         } else {
             self.state.expanded.insert(path.clone());
-            self.request_directory(path);
+            self.request_directory(path, true);
         }
         self.persist();
     }
@@ -605,7 +620,7 @@ impl TermWindow {
         };
         self.explorer.tick_scheduled = true;
         promise::spawn::spawn(async move {
-            smol::Timer::after(CONTEXT_POLL_INTERVAL).await;
+            smol::Timer::after(SERVICE_POLL_INTERVAL).await;
             window.notify(TermWindowNotif::ExplorerTick);
         })
         .detach();
@@ -619,6 +634,10 @@ impl TermWindow {
                 ServiceResponse::DirectoryListed(listing) => {
                     self.explorer.pending_directories.remove(&listing.path);
                     changed |= self.explorer.cache.apply(listing);
+                    // A newly loaded parent can expose persisted expanded
+                    // descendants. Queue only those not already cached; do
+                    // not rescan the tree from paint or context polling.
+                    self.explorer.ensure_expanded_directories();
                 }
                 ServiceResponse::ContextResolved(context) => {
                     let is_current = self
@@ -678,7 +697,7 @@ impl TermWindow {
             None => return,
         };
         let reported_cwd = pane
-            .get_current_working_dir(CachePolicy::FetchImmediate)
+            .get_current_working_dir(CachePolicy::AllowStale)
             .and_then(|url| url.to_file_path().ok());
         let last_known_cwd = self
             .explorer
@@ -689,7 +708,7 @@ impl TermWindow {
             pane_id: pane.pane_id(),
             pane_title: pane.get_title(),
             reported_cwd,
-            foreground_process: pane.get_foreground_process_name(CachePolicy::FetchImmediate),
+            foreground_process: pane.get_foreground_process_name(CachePolicy::AllowStale),
             tty_name: pane.tty_name(),
             roots: self
                 .explorer
@@ -763,7 +782,7 @@ impl TermWindow {
         self.explorer.state.show_hidden = !self.explorer.state.show_hidden;
         self.explorer.cache.clear();
         self.explorer.pending_directories.clear();
-        self.explorer.request_expanded_directories();
+        self.explorer.ensure_expanded_directories();
         self.explorer.persist();
         if let Some(window) = self.window.as_ref() {
             window.invalidate();
@@ -788,7 +807,7 @@ impl TermWindow {
                 self.explorer.display_root = self.explorer.state.roots.first().cloned();
             }
             self.explorer.cache.clear();
-            self.explorer.request_expanded_directories();
+            self.explorer.ensure_expanded_directories();
             self.explorer.persist();
             if let Some(window) = self.window.as_ref() {
                 window.invalidate();
@@ -1140,8 +1159,6 @@ impl TermWindow {
     }
 
     pub fn paint_explorer(&mut self, layers: &mut TripleLayerQuadAllocator) -> anyhow::Result<()> {
-        self.explorer.request_expanded_directories();
-
         let dpi = self.dimensions.dpi;
         let scale = |value| logical_to_physical(value, dpi);
         let divider_width = scale(DIVIDER_WIDTH);

@@ -18,7 +18,7 @@ was installed when this fork was created.
 - Code OSS Explorer styling with the reference `#252526` background, 35 px
   title, 22 px rows, 11/13 px macOS system UI text, exact bundled Seti file
   icons, native chevrons, selection states, and scrollbar geometry
-- Roomier defaults: a 420 px explorer, 14 pt text, and a 100 × 32 terminal
+- Roomier defaults: a 520 px explorer, 14 pt text, and a 100 × 32 terminal
   viewport
 - Right-aligned Git decorations for modified, added, deleted, renamed,
   untracked, and conflicted files, resolved off the render thread

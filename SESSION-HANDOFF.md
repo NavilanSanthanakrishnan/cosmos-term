@@ -32,9 +32,16 @@ explorer and using independent application/runtime identities.
   `-apple-system` alias, so Cosmos registers the OS-owned
   `/System/Library/Fonts/SFNS.ttf` face as `System Font` without bundling or
   redistributing it.
-- The 420 logical-pixel default remains intentionally roomy, with 14 pt
+- The 520 logical-pixel default remains intentionally roomy, with 14 pt
   terminal text and a 100 × 32 initial terminal. Complete Explorer geometry is
   DPI-scaled, so it retains the same apparent size at 72 and 144 DPI.
+- Layout version 4 migrates previously persisted narrow widths (355 px in the
+  live upgrade) to 520 px and saves the migration immediately. The divider
+  remains resizable from 240 through 840 logical pixels.
+- Explorer paint and repeated pane-context checks no longer queue redundant
+  directory scans. Cached expanded folders load once, watcher/periodic events
+  perform explicit refreshes, pane metadata uses the non-blocking stale-cache
+  policy, and worker responses are collected every 50 ms.
 - macOS initial geometry now uses the active screen's effective DPI. After
   Cocoa finalizes cross-screen placement, Cosmos restores the mux-requested
   cell geometry against the actual screen and resizes WebGPU before repainting;
@@ -74,17 +81,15 @@ explorer and using independent application/runtime identities.
   sibling roots and parent-directory siblings; Git porcelain parsing and
   layout migration are covered as well.
 - The final installed `cosmos-term-gui` SHA-256 is
-  `5d4789a78dc266b06475a10d37f9e64319e5934ab4772b08cb4106755625cfcb`;
+  `0b40ecea9cb9375e2ff8ac3c629d0000eac96b9885fb89c51180edc2471b7fdd`;
   it exactly matches the packaged release binary.
   Final native captures are
-  `/tmp/cosmos-visual/cosmos-vscode-explorer-final-installed-1x.png`
-  (`385f723a2f6e9d614aeb8c9a3db11e71c4d01d029f47807a42fdc47284bd6c37`,
-  1288 × 717 at 72 DPI) and
-  `/tmp/cosmos-visual/cosmos-vscode-explorer-final-installed-retina.png`
-  (`fb3825d47b814da5c43c01825e4adff2a4bd75db451c2dbef58c717fa1b5b852`,
-  2576 × 1434 at 144 DPI).
-  The reference comparison is
-  `/tmp/cosmos-visual/vscode-reference-vs-cosmos-final-installed.png`.
+  `/tmp/cosmos-visual/cosmos-responsive-wide-final-1x.png`
+  (`371227a547a539ce8c3940ab25d0f2a8b217475bf5570bfe5b4d6fd4ec2a4d42`,
+  1337 × 717 at 72 DPI) and
+  `/tmp/cosmos-visual/cosmos-responsive-wide-final-retina.png`
+  (`e9f4f67b1618b2afab2b237db824fdf694cfd61760689240445a67418f0a4631`,
+  2776 × 1434 at 144 DPI).
 
 ## Verification commands
 

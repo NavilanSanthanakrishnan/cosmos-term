@@ -8,8 +8,8 @@ use std::process::Command;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::SystemTime;
 
-const CURRENT_LAYOUT_VERSION: u8 = 3;
-pub const DEFAULT_SIDEBAR_WIDTH: usize = 420;
+const CURRENT_LAYOUT_VERSION: u8 = 4;
+pub const DEFAULT_SIDEBAR_WIDTH: usize = 520;
 pub const MIN_SIDEBAR_WIDTH: usize = 240;
 pub const MAX_SIDEBAR_WIDTH: usize = 840;
 pub const MAX_DIRECTORY_ENTRIES: usize = 5_000;
@@ -382,6 +382,10 @@ pub struct DirectoryCache {
 }
 
 impl DirectoryCache {
+    pub fn is_loaded(&self, path: &Path) -> bool {
+        self.listings.contains_key(path)
+    }
+
     pub fn mark_loading(&mut self, path: PathBuf) -> bool {
         self.loading.insert(path)
     }
@@ -979,6 +983,20 @@ mod tests {
         assert_eq!(migrated.width_px, DEFAULT_SIDEBAR_WIDTH);
         assert!(migrated.show_hidden);
         assert_eq!(migrated.follow_mode, FollowMode::Follow);
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn prior_layout_migrates_to_roomier_sidebar() {
+        let path = temporary_path("roomier-sidebar").join("state.json");
+        let mut state = ExplorerState::default();
+        state.layout_version = CURRENT_LAYOUT_VERSION - 1;
+        state.width_px = 355;
+        state.save(&path).unwrap();
+
+        let migrated = ExplorerState::load(&path).unwrap();
+        assert_eq!(migrated.layout_version, CURRENT_LAYOUT_VERSION);
+        assert_eq!(migrated.width_px, DEFAULT_SIDEBAR_WIDTH);
         let _ = fs::remove_dir_all(path.parent().unwrap());
     }
 
