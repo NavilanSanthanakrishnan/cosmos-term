@@ -11,13 +11,13 @@ use config::keyassignment::{SpawnCommand, SpawnTabDomain};
 use config::{DimensionContext, FontAttributes, FontWeight, TextStyle};
 use cosmos_workspace::{
     ancestors_from_root, expand_home, DirectoryCache, ExplorerRow, ExplorerRowKind, ExplorerState,
-    FollowMode, PaneContext, PaneContextRequest, ServiceResponse, WorkspaceRoot, WorkspaceService,
-    MAX_SIDEBAR_WIDTH, MIN_SIDEBAR_WIDTH,
+    FollowMode, GitFileStatus, PaneContext, PaneContextRequest, ServiceResponse, WorkspaceRoot,
+    WorkspaceService, MAX_SIDEBAR_WIDTH, MIN_SIDEBAR_WIDTH,
 };
 use mux::pane::CachePolicy;
 use mux::tab::{SplitDirection, SplitRequest, SplitSize};
 use mux::Mux;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use termwiz::cell::CellAttributes;
@@ -30,60 +30,27 @@ use unicode_width::UnicodeWidthStr;
 
 const DIVIDER_WIDTH: usize = 1;
 const DIVIDER_HIT_WIDTH: usize = 7;
-const ACTIVITY_BAR_WIDTH: usize = 48;
-const ACTIVITY_ICON_SIZE: usize = 24;
-const TITLE_HEIGHT: usize = 44;
-const ROW_HEIGHT: usize = 28;
-const TITLE_LEFT: usize = 18;
-const TREE_LEFT: usize = 10;
-const TREE_INDENT: usize = 12;
-const ICON_SIZE: usize = 18;
-const ACTION_SIZE: usize = 26;
-const MODE_ACTION_WIDTH: usize = 82;
+const TITLE_HEIGHT: usize = 35;
+const ROW_HEIGHT: usize = 22;
+const TITLE_LEFT: usize = 20;
+const TREE_LEFT: usize = 4;
+const TREE_INDENT: usize = 8;
+const ICON_SIZE: usize = 16;
+const ACTION_SIZE: usize = 22;
 const VIRTUAL_ROOT_INDEX: usize = usize::MAX;
 const CONTEXT_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const DIRECTORY_REFRESH_INTERVAL: Duration = Duration::from_secs(2);
 
 const SIDEBAR_BG: RgbColor = RgbColor::new_8bpc(24, 24, 24);
-const ACTIVITY_BAR_BG: RgbColor = RgbColor::new_8bpc(24, 24, 24);
 const DIVIDER: RgbColor = RgbColor::new_8bpc(43, 43, 43);
 const TEXT: RgbColor = RgbColor::new_8bpc(204, 204, 204);
 const MUTED: RgbColor = RgbColor::new_8bpc(157, 157, 157);
-const ICON: RgbColor = RgbColor::new_8bpc(200, 200, 200);
 const INDENT_GUIDE: RgbColor = RgbColor::new_8bpc(50, 50, 50);
 const HOVER_BG: RgbColor = RgbColor::new_8bpc(42, 45, 46);
-const MODE_BG: RgbColor = RgbColor::new_8bpc(45, 45, 45);
 const INACTIVE_SELECTION_BG: RgbColor = RgbColor::new_8bpc(55, 55, 61);
 const ACTIVE_SELECTION_BG: RgbColor = RgbColor::new_8bpc(4, 57, 94);
 const ACCENT: RgbColor = RgbColor::new_8bpc(0, 120, 212);
 const ERROR: RgbColor = RgbColor::new_8bpc(248, 128, 112);
-
-const ACTIVITY_FILES_ICON: &[Poly] = &[
-    Poly {
-        path: &[
-            PolyCommand::MoveTo(BlockCoord::Frac(1, 8), BlockCoord::Frac(1, 8)),
-            PolyCommand::LineTo(BlockCoord::Frac(5, 8), BlockCoord::Frac(1, 8)),
-            PolyCommand::LineTo(BlockCoord::Frac(6, 8), BlockCoord::Frac(2, 8)),
-            PolyCommand::LineTo(BlockCoord::Frac(6, 8), BlockCoord::Frac(6, 8)),
-            PolyCommand::LineTo(BlockCoord::Frac(1, 8), BlockCoord::Frac(6, 8)),
-            PolyCommand::Close,
-        ],
-        intensity: BlockAlpha::Full,
-        style: PolyStyle::OutlineThin,
-    },
-    Poly {
-        path: &[
-            PolyCommand::MoveTo(BlockCoord::Frac(3, 8), BlockCoord::Frac(3, 8)),
-            PolyCommand::LineTo(BlockCoord::Frac(6, 8), BlockCoord::Frac(3, 8)),
-            PolyCommand::LineTo(BlockCoord::Frac(7, 8), BlockCoord::Frac(4, 8)),
-            PolyCommand::LineTo(BlockCoord::Frac(7, 8), BlockCoord::Frac(7, 8)),
-            PolyCommand::LineTo(BlockCoord::Frac(3, 8), BlockCoord::Frac(7, 8)),
-            PolyCommand::Close,
-        ],
-        intensity: BlockAlpha::Full,
-        style: PolyStyle::OutlineThin,
-    },
-];
 
 const CHEVRON_RIGHT: &[Poly] = &[Poly {
     path: &[
@@ -105,127 +72,64 @@ const CHEVRON_DOWN: &[Poly] = &[Poly {
     style: PolyStyle::OutlineThin,
 }];
 
-const FOLDER_ICON: &[Poly] = &[Poly {
-    path: &[
-        PolyCommand::MoveTo(BlockCoord::Frac(1, 8), BlockCoord::Frac(2, 8)),
-        PolyCommand::LineTo(BlockCoord::Frac(3, 8), BlockCoord::Frac(2, 8)),
-        PolyCommand::LineTo(BlockCoord::Frac(4, 8), BlockCoord::Frac(3, 8)),
-        PolyCommand::LineTo(BlockCoord::Frac(7, 8), BlockCoord::Frac(3, 8)),
-        PolyCommand::LineTo(BlockCoord::Frac(7, 8), BlockCoord::Frac(7, 8)),
-        PolyCommand::LineTo(BlockCoord::Frac(1, 8), BlockCoord::Frac(7, 8)),
-        PolyCommand::Close,
-    ],
-    intensity: BlockAlpha::Full,
-    style: PolyStyle::OutlineThin,
-}];
+fn explorer_file_icon(path: &Path) -> (&'static str, RgbColor) {
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    let extension = path
+        .extension()
+        .map(|extension| extension.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
 
-const FILE_ICON: &[Poly] = &[Poly {
-    path: &[
-        PolyCommand::MoveTo(BlockCoord::Frac(2, 8), BlockCoord::Frac(1, 8)),
-        PolyCommand::LineTo(BlockCoord::Frac(5, 8), BlockCoord::Frac(1, 8)),
-        PolyCommand::LineTo(BlockCoord::Frac(7, 8), BlockCoord::Frac(3, 8)),
-        PolyCommand::LineTo(BlockCoord::Frac(7, 8), BlockCoord::Frac(7, 8)),
-        PolyCommand::LineTo(BlockCoord::Frac(2, 8), BlockCoord::Frac(7, 8)),
-        PolyCommand::Close,
-        PolyCommand::MoveTo(BlockCoord::Frac(5, 8), BlockCoord::Frac(1, 8)),
-        PolyCommand::LineTo(BlockCoord::Frac(5, 8), BlockCoord::Frac(3, 8)),
-        PolyCommand::LineTo(BlockCoord::Frac(7, 8), BlockCoord::Frac(3, 8)),
-    ],
-    intensity: BlockAlpha::Full,
-    style: PolyStyle::OutlineThin,
-}];
+    if name == "yarn.lock" || name.starts_with("yarn.") {
+        return ("\u{e6a7}", RgbColor::new_8bpc(81, 154, 186));
+    }
+    if name.starts_with("readme") {
+        return ("\u{e66a}", RgbColor::new_8bpc(81, 154, 186));
+    }
+    if name.starts_with(".git") {
+        return ("\u{e65d}", RgbColor::new_8bpc(227, 121, 51));
+    }
 
-const ADD_ROOT_ICON: &[Poly] = &[
-    Poly {
-        path: &[
-            PolyCommand::MoveTo(BlockCoord::Frac(1, 8), BlockCoord::Frac(3, 8)),
-            PolyCommand::LineTo(BlockCoord::Frac(3, 8), BlockCoord::Frac(3, 8)),
-            PolyCommand::LineTo(BlockCoord::Frac(4, 8), BlockCoord::Frac(4, 8)),
-            PolyCommand::LineTo(BlockCoord::Frac(7, 8), BlockCoord::Frac(4, 8)),
-            PolyCommand::LineTo(BlockCoord::Frac(7, 8), BlockCoord::Frac(7, 8)),
-            PolyCommand::LineTo(BlockCoord::Frac(1, 8), BlockCoord::Frac(7, 8)),
-            PolyCommand::Close,
-        ],
-        intensity: BlockAlpha::Full,
-        style: PolyStyle::OutlineThin,
-    },
-    Poly {
-        path: &[
-            PolyCommand::MoveTo(BlockCoord::Frac(5, 8), BlockCoord::Frac(1, 8)),
-            PolyCommand::LineTo(BlockCoord::Frac(5, 8), BlockCoord::Frac(4, 8)),
-            PolyCommand::MoveTo(BlockCoord::Frac(3, 8), BlockCoord::Frac(2, 8)),
-            PolyCommand::LineTo(BlockCoord::Frac(7, 8), BlockCoord::Frac(2, 8)),
-        ],
-        intensity: BlockAlpha::Full,
-        style: PolyStyle::OutlineThin,
-    },
-];
+    match extension.as_str() {
+        "js" | "cjs" | "mjs" => ("\u{e60c}", RgbColor::new_8bpc(203, 203, 65)),
+        "jsx" => ("\u{e625}", RgbColor::new_8bpc(81, 154, 186)),
+        "ts" => ("\u{e628}", RgbColor::new_8bpc(81, 154, 186)),
+        "tsx" => ("\u{e625}", RgbColor::new_8bpc(81, 154, 186)),
+        "css" | "scss" | "sass" | "less" => ("\u{e614}", RgbColor::new_8bpc(81, 154, 186)),
+        "json" | "jsonc" => ("\u{e60b}", RgbColor::new_8bpc(203, 203, 65)),
+        "svg" => ("\u{e698}", RgbColor::new_8bpc(160, 116, 196)),
+        "md" | "mdx" | "markdown" => ("\u{e609}", RgbColor::new_8bpc(81, 154, 186)),
+        "html" | "htm" => ("\u{e60e}", RgbColor::new_8bpc(227, 121, 51)),
+        "xml" => ("\u{e619}", RgbColor::new_8bpc(227, 121, 51)),
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "ico" => {
+            ("\u{e60d}", RgbColor::new_8bpc(160, 116, 196))
+        }
+        "rs" => ("\u{e68b}", RgbColor::new_8bpc(204, 62, 68)),
+        "py" => ("\u{e606}", RgbColor::new_8bpc(81, 154, 186)),
+        "sh" | "zsh" | "bash" => ("\u{e691}", RgbColor::new_8bpc(141, 193, 73)),
+        "lock" => ("\u{e672}", RgbColor::new_8bpc(109, 128, 134)),
+        _ => ("\u{e64e}", RgbColor::new_8bpc(212, 215, 214)),
+    }
+}
 
-const REVEAL_ICON: &[Poly] = &[
-    Poly {
-        path: &[
-            PolyCommand::MoveTo(BlockCoord::Frac(4, 8), BlockCoord::Frac(1, 8)),
-            PolyCommand::LineTo(BlockCoord::Frac(4, 8), BlockCoord::Frac(3, 8)),
-            PolyCommand::MoveTo(BlockCoord::Frac(4, 8), BlockCoord::Frac(5, 8)),
-            PolyCommand::LineTo(BlockCoord::Frac(4, 8), BlockCoord::Frac(7, 8)),
-            PolyCommand::MoveTo(BlockCoord::Frac(1, 8), BlockCoord::Frac(4, 8)),
-            PolyCommand::LineTo(BlockCoord::Frac(3, 8), BlockCoord::Frac(4, 8)),
-            PolyCommand::MoveTo(BlockCoord::Frac(5, 8), BlockCoord::Frac(4, 8)),
-            PolyCommand::LineTo(BlockCoord::Frac(7, 8), BlockCoord::Frac(4, 8)),
-        ],
-        intensity: BlockAlpha::Full,
-        style: PolyStyle::OutlineThin,
-    },
-    Poly {
-        path: &[
-            PolyCommand::MoveTo(BlockCoord::Frac(3, 8), BlockCoord::Frac(3, 8)),
-            PolyCommand::LineTo(BlockCoord::Frac(5, 8), BlockCoord::Frac(3, 8)),
-            PolyCommand::LineTo(BlockCoord::Frac(5, 8), BlockCoord::Frac(5, 8)),
-            PolyCommand::LineTo(BlockCoord::Frac(3, 8), BlockCoord::Frac(5, 8)),
-            PolyCommand::Close,
-        ],
-        intensity: BlockAlpha::Full,
-        style: PolyStyle::OutlineThin,
-    },
-];
-
-const HIDDEN_ICON: &[Poly] = &[
-    Poly {
-        path: &[
-            PolyCommand::MoveTo(BlockCoord::Frac(1, 8), BlockCoord::Frac(4, 8)),
-            PolyCommand::QuadTo {
-                control: (BlockCoord::Frac(4, 8), BlockCoord::Frac(1, 8)),
-                to: (BlockCoord::Frac(7, 8), BlockCoord::Frac(4, 8)),
-            },
-            PolyCommand::QuadTo {
-                control: (BlockCoord::Frac(4, 8), BlockCoord::Frac(7, 8)),
-                to: (BlockCoord::Frac(1, 8), BlockCoord::Frac(4, 8)),
-            },
-        ],
-        intensity: BlockAlpha::Full,
-        style: PolyStyle::OutlineThin,
-    },
-    Poly {
-        path: &[
-            PolyCommand::MoveTo(BlockCoord::Frac(4, 8), BlockCoord::Frac(3, 8)),
-            PolyCommand::LineTo(BlockCoord::Frac(4, 8), BlockCoord::Frac(5, 8)),
-        ],
-        intensity: BlockAlpha::Full,
-        style: PolyStyle::Outline,
-    },
-];
+fn git_status_color(status: GitFileStatus) -> RgbColor {
+    match status {
+        GitFileStatus::Modified | GitFileStatus::Renamed => RgbColor::new_8bpc(226, 192, 141),
+        GitFileStatus::Added | GitFileStatus::Untracked => RgbColor::new_8bpc(115, 201, 145),
+        GitFileStatus::Deleted => RgbColor::new_8bpc(199, 78, 57),
+        GitFileStatus::Conflict => RgbColor::new_8bpc(228, 103, 107),
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExplorerHeaderAction {
-    AddRoot,
-    Reveal,
     CycleFollowMode,
-    ToggleHidden,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExplorerUiItem {
-    Activity,
     Surface,
     Divider,
     Header(ExplorerHeaderAction),
@@ -255,8 +159,11 @@ pub struct ExplorerUi {
     focused: bool,
     scroll: usize,
     context_request_in_flight: bool,
+    git_statuses: HashMap<PathBuf, GitFileStatus>,
+    git_status_request_in_flight: bool,
     last_context_request: Instant,
     last_directory_refresh: Instant,
+    last_git_status_refresh: Instant,
     tick_scheduled: bool,
     last_error: Option<String>,
 }
@@ -295,10 +202,15 @@ impl ExplorerUi {
             focused: false,
             scroll: 0,
             context_request_in_flight: false,
+            git_statuses: HashMap::new(),
+            git_status_request_in_flight: false,
             last_context_request: Instant::now()
                 .checked_sub(CONTEXT_POLL_INTERVAL)
                 .unwrap_or_else(Instant::now),
             last_directory_refresh: Instant::now(),
+            last_git_status_refresh: Instant::now()
+                .checked_sub(DIRECTORY_REFRESH_INTERVAL)
+                .unwrap_or_else(Instant::now),
             tick_scheduled: false,
             last_error,
         }
@@ -349,6 +261,16 @@ impl ExplorerUi {
         self.request_expanded_directories();
     }
 
+    fn request_git_status(&mut self) {
+        if self.git_status_request_in_flight {
+            return;
+        }
+        if let Some(root) = self.display_root.as_ref() {
+            self.git_status_request_in_flight = true;
+            self.service.git_status(root.path.clone());
+        }
+    }
+
     fn refresh_changed_paths(&mut self, paths: Vec<PathBuf>) {
         let mut directories = HashSet::new();
         for path in paths {
@@ -391,9 +313,11 @@ impl ExplorerUi {
         if changed {
             self.scroll = 0;
             self.selected_path = Some(path.clone());
+            self.git_statuses.clear();
         }
         self.selected_root = self.exact_root_index(&path);
         self.request_expanded_directories();
+        self.request_git_status();
         changed || expanded
     }
 
@@ -666,6 +590,19 @@ impl TermWindow {
                         self.explorer.context_request_in_flight = false;
                     }
                 }
+                ServiceResponse::GitStatusLoaded(snapshot) => {
+                    self.explorer.git_status_request_in_flight = false;
+                    let is_current = self
+                        .explorer
+                        .display_root
+                        .as_ref()
+                        .map(|root| root.path == snapshot.requested_root)
+                        .unwrap_or(false);
+                    if is_current && self.explorer.git_statuses != snapshot.statuses {
+                        self.explorer.git_statuses = snapshot.statuses;
+                        changed = true;
+                    }
+                }
                 ServiceResponse::DirectoryChanged(paths) => {
                     self.explorer.refresh_changed_paths(paths);
                 }
@@ -685,6 +622,10 @@ impl TermWindow {
         if now.duration_since(self.explorer.last_directory_refresh) >= DIRECTORY_REFRESH_INTERVAL {
             self.explorer.last_directory_refresh = now;
             self.explorer.refresh_expanded_directories();
+        }
+        if now.duration_since(self.explorer.last_git_status_refresh) >= DIRECTORY_REFRESH_INTERVAL {
+            self.explorer.last_git_status_refresh = now;
+            self.explorer.request_git_status();
         }
         self.schedule_explorer_tick();
         changed
@@ -1000,7 +941,55 @@ impl TermWindow {
         _background: RgbColor,
         bold: bool,
     ) -> anyhow::Result<()> {
-        let mut attributes = FontAttributes::new("Helvetica Neue");
+        self.render_explorer_text(
+            layers,
+            text,
+            top,
+            left,
+            width,
+            height,
+            foreground,
+            "Helvetica Neue",
+            bold,
+        )
+    }
+
+    fn render_explorer_glyph(
+        &mut self,
+        layers: &mut TripleLayerQuadAllocator,
+        glyph: &str,
+        top: f32,
+        left: f32,
+        width: f32,
+        height: f32,
+        foreground: RgbColor,
+    ) -> anyhow::Result<()> {
+        self.render_explorer_text(
+            layers,
+            glyph,
+            top,
+            left,
+            width,
+            height,
+            foreground,
+            "Symbols Nerd Font Mono",
+            false,
+        )
+    }
+
+    fn render_explorer_text(
+        &mut self,
+        layers: &mut TripleLayerQuadAllocator,
+        text: &str,
+        top: f32,
+        left: f32,
+        width: f32,
+        height: f32,
+        foreground: RgbColor,
+        family: &str,
+        bold: bool,
+    ) -> anyhow::Result<()> {
+        let mut attributes = FontAttributes::new(family);
         if bold {
             attributes.weight = FontWeight::BOLD;
         }
@@ -1009,7 +998,8 @@ impl TermWindow {
             foreground: None,
         })?;
         let render_metrics = RenderMetrics::with_font_metrics(&font.metrics());
-        let top = top + ((height - render_metrics.cell_size.height as f32) / 2.).max(0.);
+        let top = (top + ((height - render_metrics.cell_size.height as f32) / 2.).max(0.)).round();
+        let left = left.round();
         let gl_state = self.render_state.as_ref().unwrap();
         let element = Element::new(&font, ElementContent::Text(text.to_string()));
         let computed = self.compute_element(
@@ -1038,7 +1028,7 @@ impl TermWindow {
         };
         let left_offset = self.dimensions.pixel_width as f32 / -2.;
         let top_offset = self.dimensions.pixel_height as f32 / -2.;
-        let mut pos_x = computed.content_rect.min_x();
+        let mut pos_x = computed.content_rect.min_x().round();
         let color = foreground.to_linear_tuple_rgba();
         for cell in cells {
             if pos_x >= computed.content_rect.max_x() {
@@ -1052,11 +1042,12 @@ impl TermWindow {
                         break;
                     }
                     let mut quad = layers.allocate(1)?;
+                    let sprite_y = computed.content_rect.min_y().round() + top_offset;
                     quad.set_position(
                         pos_x + left_offset,
-                        computed.content_rect.min_y() + top_offset,
+                        sprite_y,
                         pos_x + left_offset + glyph_width,
-                        computed.content_rect.min_y() + top_offset + glyph_height,
+                        sprite_y + glyph_height,
                     );
                     quad.set_fg_color(color);
                     quad.set_alt_color_and_mix_value(color, 0.);
@@ -1066,13 +1057,16 @@ impl TermWindow {
                 }
                 ElementCell::Glyph(glyph) => {
                     if let Some(texture) = glyph.texture.as_ref() {
-                        let pos_y = computed.content_rect.min_y() + top_offset
+                        let pos_y = (computed.content_rect.min_y()
                             - (glyph.y_offset + glyph.bearing_y).get() as f32
-                            + computed.baseline;
+                            + computed.baseline)
+                            .round()
+                            + top_offset;
                         if pos_x + glyph.x_advance.get() as f32 > computed.content_rect.max_x() {
                             break;
                         }
-                        let glyph_x = pos_x + (glyph.x_offset + glyph.bearing_x).get() as f32;
+                        let glyph_x =
+                            (pos_x + (glyph.x_offset + glyph.bearing_x).get() as f32).round();
                         let glyph_width = texture.coords.size.width as f32 * glyph.scale as f32;
                         let glyph_height = texture.coords.size.height as f32 * glyph.scale as f32;
                         let mut quad = layers.allocate(1)?;
@@ -1128,8 +1122,6 @@ impl TermWindow {
 
         let border = self.get_os_border();
         let width = self.explorer.state.width_px;
-        let panel_left = ACTIVITY_BAR_WIDTH;
-        let panel_width = width.saturating_sub(panel_left);
         let top = border.top.get();
         let bottom = self
             .dimensions
@@ -1149,28 +1141,6 @@ impl TermWindow {
         )?;
         self.filled_rectangle(
             layers,
-            0,
-            euclid::rect(
-                0.,
-                top as f32,
-                ACTIVITY_BAR_WIDTH as f32,
-                (bottom - top) as f32,
-            ),
-            ACTIVITY_BAR_BG.to_linear_tuple_rgba(),
-        )?;
-        self.filled_rectangle(
-            layers,
-            2,
-            euclid::rect(
-                ACTIVITY_BAR_WIDTH.saturating_sub(1) as f32,
-                top as f32,
-                1.,
-                (bottom - top) as f32,
-            ),
-            DIVIDER.to_linear_tuple_rgba(),
-        )?;
-        self.filled_rectangle(
-            layers,
             2,
             euclid::rect(
                 width as f32,
@@ -1181,154 +1151,67 @@ impl TermWindow {
             DIVIDER.to_linear_tuple_rgba(),
         )?;
         self.ui_items.push(UIItem {
-            x: panel_left,
+            x: 0,
             y: top,
-            width: panel_width,
+            width,
             height: bottom - top,
             item_type: UIItemType::Explorer(ExplorerUiItem::Surface),
         });
 
-        let activity_hovered = self.explorer_item_hovered(ExplorerUiItem::Activity);
-        if activity_hovered {
+        let action_x = width.saturating_sub(ACTION_SIZE + 8);
+        let action_y = top + (TITLE_HEIGHT - ACTION_SIZE) / 2;
+        let action = ExplorerHeaderAction::CycleFollowMode;
+        if self.explorer_item_hovered(ExplorerUiItem::Header(action)) {
             self.filled_rectangle(
                 layers,
                 0,
                 euclid::rect(
-                    0.,
-                    top as f32,
-                    ACTIVITY_BAR_WIDTH as f32,
-                    ACTIVITY_BAR_WIDTH as f32,
+                    action_x as f32,
+                    action_y as f32,
+                    ACTION_SIZE as f32,
+                    ACTION_SIZE as f32,
                 ),
                 HOVER_BG.to_linear_tuple_rgba(),
             )?;
         }
-        self.filled_rectangle(
-            layers,
-            2,
-            euclid::rect(0., top as f32, 2., ACTIVITY_BAR_WIDTH as f32),
-            ACCENT.to_linear_tuple_rgba(),
-        )?;
-        self.draw_explorer_icon(
-            layers,
-            ACTIVITY_FILES_ICON,
-            (ACTIVITY_BAR_WIDTH - ACTIVITY_ICON_SIZE) / 2,
-            top + (ACTIVITY_BAR_WIDTH - ACTIVITY_ICON_SIZE) / 2,
-            ACTIVITY_ICON_SIZE,
-            TEXT,
-        )?;
+        let dot_color = if self.explorer.state.follow_mode == FollowMode::Locked {
+            ACCENT
+        } else {
+            MUTED
+        };
+        for offset in [6usize, 10, 14].iter().copied() {
+            self.filled_rectangle(
+                layers,
+                1,
+                euclid::rect(
+                    (action_x + offset) as f32,
+                    (action_y + ACTION_SIZE / 2) as f32,
+                    2.,
+                    2.,
+                ),
+                dot_color.to_linear_tuple_rgba(),
+            )?;
+        }
         self.ui_items.push(UIItem {
-            x: 0,
-            y: top,
-            width: ACTIVITY_BAR_WIDTH,
-            height: ACTIVITY_BAR_WIDTH,
-            item_type: UIItemType::Explorer(ExplorerUiItem::Activity),
+            x: action_x,
+            y: action_y,
+            width: ACTION_SIZE,
+            height: ACTION_SIZE,
+            item_type: UIItemType::Explorer(ExplorerUiItem::Header(action)),
         });
 
-        let actions: [(ExplorerHeaderAction, &'static [Poly]); 3] = [
-            (ExplorerHeaderAction::AddRoot, ADD_ROOT_ICON),
-            (ExplorerHeaderAction::Reveal, REVEAL_ICON),
-            (ExplorerHeaderAction::ToggleHidden, HIDDEN_ICON),
-        ];
-        let actions_left = width.saturating_sub(actions.len() * ACTION_SIZE + 8);
-        let mode_x = actions_left.saturating_sub(MODE_ACTION_WIDTH + 8);
-        let header_text_left = panel_left + TITLE_LEFT;
-        let header_text_width = mode_x.saturating_sub(header_text_left + 8);
+        let header_text_width = action_x.saturating_sub(TITLE_LEFT + 8);
         self.render_explorer_line(
             layers,
             "EXPLORER",
             top as f32,
-            header_text_left as f32,
+            TITLE_LEFT as f32,
             header_text_width as f32,
             TITLE_HEIGHT as f32,
             TEXT,
             SIDEBAR_BG,
             false,
         )?;
-
-        let mode_y = top + (TITLE_HEIGHT - ACTION_SIZE) / 2;
-        let mode_hovered = self.explorer_item_hovered(ExplorerUiItem::Header(
-            ExplorerHeaderAction::CycleFollowMode,
-        ));
-        self.filled_rectangle(
-            layers,
-            0,
-            euclid::rect(
-                mode_x as f32,
-                mode_y as f32,
-                MODE_ACTION_WIDTH as f32,
-                ACTION_SIZE as f32,
-            ),
-            (if mode_hovered { HOVER_BG } else { MODE_BG }).to_linear_tuple_rgba(),
-        )?;
-        if self.explorer.state.follow_mode == FollowMode::Locked {
-            self.filled_rectangle(
-                layers,
-                2,
-                euclid::rect(
-                    mode_x as f32,
-                    (mode_y + ACTION_SIZE - 2) as f32,
-                    MODE_ACTION_WIDTH as f32,
-                    2.,
-                ),
-                ACCENT.to_linear_tuple_rgba(),
-            )?;
-        }
-        self.render_explorer_line(
-            layers,
-            self.explorer.state.follow_mode.label(),
-            mode_y as f32,
-            (mode_x + 10) as f32,
-            MODE_ACTION_WIDTH.saturating_sub(20) as f32,
-            ACTION_SIZE as f32,
-            if self.explorer.state.follow_mode == FollowMode::Locked {
-                TEXT
-            } else {
-                MUTED
-            },
-            MODE_BG,
-            true,
-        )?;
-        self.ui_items.push(UIItem {
-            x: mode_x,
-            y: mode_y,
-            width: MODE_ACTION_WIDTH,
-            height: ACTION_SIZE,
-            item_type: UIItemType::Explorer(ExplorerUiItem::Header(
-                ExplorerHeaderAction::CycleFollowMode,
-            )),
-        });
-
-        for (offset, (action, icon)) in actions.iter().enumerate() {
-            let x = actions_left + offset * ACTION_SIZE;
-            let y = top + (TITLE_HEIGHT - ACTION_SIZE) / 2;
-            if self.explorer_item_hovered(ExplorerUiItem::Header(*action)) {
-                self.filled_rectangle(
-                    layers,
-                    0,
-                    euclid::rect(x as f32, y as f32, ACTION_SIZE as f32, ACTION_SIZE as f32),
-                    HOVER_BG.to_linear_tuple_rgba(),
-                )?;
-            }
-            self.ui_items.push(UIItem {
-                x,
-                y,
-                width: ACTION_SIZE,
-                height: ACTION_SIZE,
-                item_type: UIItemType::Explorer(ExplorerUiItem::Header(*action)),
-            });
-            let color = match action {
-                ExplorerHeaderAction::ToggleHidden if self.explorer.state.show_hidden => ACCENT,
-                _ => MUTED,
-            };
-            self.draw_explorer_icon(
-                layers,
-                icon,
-                x + (ACTION_SIZE - ICON_SIZE) / 2,
-                y + (ACTION_SIZE - ICON_SIZE) / 2,
-                ICON_SIZE,
-                color,
-            )?;
-        }
 
         let active_path = self.explorer.active_highlight_path().map(Path::to_path_buf);
         let selected_path = self.explorer.selected_path.clone();
@@ -1340,6 +1223,11 @@ impl TermWindow {
             let hovered = self.explorer_item_hovered(ExplorerUiItem::Row(row_index));
             let is_active = row.path == active_path;
             let is_selected = self.explorer.focused && row.path == selected_path;
+            let git_status = row
+                .path
+                .as_ref()
+                .and_then(|path| self.explorer.git_statuses.get(path))
+                .copied();
             let background = if row.kind == ExplorerRowKind::Root {
                 if hovered {
                     HOVER_BG
@@ -1359,12 +1247,7 @@ impl TermWindow {
                 self.filled_rectangle(
                     layers,
                     0,
-                    euclid::rect(
-                        panel_left as f32,
-                        y as f32,
-                        panel_width as f32,
-                        ROW_HEIGHT as f32,
-                    ),
+                    euclid::rect(0., y as f32, width as f32, ROW_HEIGHT as f32),
                     background.to_linear_tuple_rgba(),
                 )?;
             }
@@ -1373,12 +1256,7 @@ impl TermWindow {
                 self.filled_rectangle(
                     layers,
                     0,
-                    euclid::rect(
-                        panel_left as f32,
-                        (y + ROW_HEIGHT - 1) as f32,
-                        panel_width as f32,
-                        1.,
-                    ),
+                    euclid::rect(0., (y + ROW_HEIGHT - 1) as f32, width as f32, 1.),
                     DIVIDER.to_linear_tuple_rgba(),
                 )?;
                 self.draw_explorer_icon(
@@ -1388,12 +1266,12 @@ impl TermWindow {
                     } else {
                         CHEVRON_RIGHT
                     },
-                    panel_left + 4,
+                    4,
                     y + (ROW_HEIGHT - ICON_SIZE) / 2,
                     ICON_SIZE,
                     TEXT,
                 )?;
-                let root_text_left = panel_left + 30;
+                let root_text_left = 24;
                 let max_cells = width.saturating_sub(root_text_left + 8) / 8;
                 self.render_explorer_line(
                     layers,
@@ -1408,7 +1286,7 @@ impl TermWindow {
                 )?;
             } else {
                 let depth = row.depth.saturating_sub(1);
-                let tree_left = panel_left + TREE_LEFT;
+                let tree_left = TREE_LEFT;
                 for guide in 0..depth {
                     let guide_x = tree_left + ICON_SIZE / 2 + guide * TREE_INDENT;
                     self.filled_rectangle(
@@ -1420,7 +1298,6 @@ impl TermWindow {
                 }
 
                 let twistie_x = tree_left + depth * TREE_INDENT;
-                let icon_x = twistie_x + ICON_SIZE;
                 let icon_y = y + (ROW_HEIGHT - ICON_SIZE) / 2;
                 if matches!(row.kind, ExplorerRowKind::Directory) {
                     self.draw_explorer_icon(
@@ -1435,35 +1312,65 @@ impl TermWindow {
                         ICON_SIZE,
                         TEXT,
                     )?;
-                    self.draw_explorer_icon(layers, FOLDER_ICON, icon_x, icon_y, ICON_SIZE, ICON)?;
                 } else if row.kind == ExplorerRowKind::File {
-                    self.draw_explorer_icon(layers, FILE_ICON, icon_x, icon_y, ICON_SIZE, ICON)?;
+                    let (glyph, color) = row
+                        .path
+                        .as_deref()
+                        .map(explorer_file_icon)
+                        .unwrap_or(("\u{e64e}", RgbColor::new_8bpc(212, 215, 214)));
+                    self.render_explorer_glyph(
+                        layers,
+                        glyph,
+                        y as f32,
+                        twistie_x as f32,
+                        ICON_SIZE as f32,
+                        ROW_HEIGHT as f32,
+                        color,
+                    )?;
                 }
 
-                let text_left = icon_x + ICON_SIZE + 2;
+                let text_left = twistie_x + ICON_SIZE + 2;
                 let foreground = match row.kind {
                     ExplorerRowKind::Error => ERROR,
                     ExplorerRowKind::Loading | ExplorerRowKind::Truncated => MUTED,
                     _ if is_selected => RgbColor::new_8bpc(255, 255, 255),
                     _ => TEXT,
                 };
-                let max_cells = width.saturating_sub(text_left + 8) / 8;
+                let text_right = if git_status.is_some() {
+                    width.saturating_sub(28)
+                } else {
+                    width.saturating_sub(4)
+                };
+                let max_cells = text_right.saturating_sub(text_left + 4) / 8;
                 self.render_explorer_line(
                     layers,
                     &truncate_to_width(&row.label, max_cells),
                     y as f32,
                     text_left as f32,
-                    width.saturating_sub(text_left + 4) as f32,
+                    text_right.saturating_sub(text_left) as f32,
                     ROW_HEIGHT as f32,
                     foreground,
                     background,
                     false,
                 )?;
+                if let Some(status) = git_status {
+                    self.render_explorer_line(
+                        layers,
+                        status.label(),
+                        y as f32,
+                        width.saturating_sub(24) as f32,
+                        20.,
+                        ROW_HEIGHT as f32,
+                        git_status_color(status),
+                        background,
+                        false,
+                    )?;
+                }
             }
             self.ui_items.push(UIItem {
-                x: panel_left,
+                x: 0,
                 y,
-                width: panel_width,
+                width,
                 height: ROW_HEIGHT,
                 item_type: UIItemType::Explorer(ExplorerUiItem::Row(row_index)),
             });
@@ -1523,13 +1430,6 @@ impl TermWindow {
         context: &dyn WindowOps,
     ) {
         match item {
-            ExplorerUiItem::Activity => {
-                context.set_cursor(Some(MouseCursor::Hand));
-                if event.kind == MouseEventKind::Press(MousePress::Left) {
-                    self.focus_explorer();
-                    context.invalidate();
-                }
-            }
             ExplorerUiItem::Divider => {
                 context.set_cursor(Some(MouseCursor::SizeLeftRight));
                 if event.kind == MouseEventKind::Press(MousePress::Left) {
@@ -1547,12 +1447,7 @@ impl TermWindow {
                 context.set_cursor(Some(MouseCursor::Hand));
                 if event.kind == MouseEventKind::Press(MousePress::Left) {
                     match action {
-                        ExplorerHeaderAction::AddRoot => {
-                            self.show_explorer_prompt(ExplorerPromptKind::AddRoot)
-                        }
-                        ExplorerHeaderAction::Reveal => self.reveal_active_in_explorer(),
                         ExplorerHeaderAction::CycleFollowMode => self.cycle_explorer_follow_mode(),
-                        ExplorerHeaderAction::ToggleHidden => self.toggle_explorer_hidden_files(),
                     }
                 }
             }

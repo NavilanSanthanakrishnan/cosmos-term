@@ -24,11 +24,13 @@ This crate owns UI-independent workspace behavior:
 - lazy direct-directory listings and stable sorting
 - row generation for expanded directories
 - pane-context resolution for native panes and tmux
+- non-blocking Git status snapshots and porcelain parsing
 - filesystem change notification
 
-Three independent worker threads serve directory reads, pane-context requests,
-and filesystem watches. Responses return through a single non-blocking channel
-consumed by the window. The render thread never recursively scans a workspace.
+Four independent worker threads serve directory reads, pane-context requests,
+Git status requests, and filesystem watches. Responses return through a single
+non-blocking channel consumed by the window. The render thread never
+recursively scans a workspace or invokes Git.
 
 Only expanded directories are watched, and watches are non-recursive. A
 periodic refresh provides a fallback if a platform watcher misses an event.
@@ -41,8 +43,8 @@ The native window adapter owns:
 
 - persisted `ExplorerUi` state
 - active-pane polling and context application
-- Code OSS-inspired Activity Bar, primary-sidebar title, section header,
-  explicit mode control, proportional row text, vector controls, list
+- Code OSS primary-sidebar title and exact compact tree geometry, proportional
+  row text, bundled Seti-style glyphs, native chevrons, Git decorations, list
   highlights, and inline errors
 - mouse hit targets, scrolling, divider drag, and row activation
 - keyboard navigation and root prompts
@@ -93,6 +95,16 @@ directory loading. This makes native focus and tmux pane changes visible
 without shell hooks. OSC 7 remains useful because it improves the CWD that
 WezTerm reports for native and remote-aware shells.
 
+## Git decorations
+
+The active display root is resolved to its containing repository on a
+dedicated worker. A NUL-delimited `git status --porcelain=v1` snapshot is
+parsed into absolute file paths and refreshed independently of painting.
+Modified, added, deleted, renamed, untracked, and conflict states render at
+the right edge of their rows. `.git` itself remains excluded, matching VS
+Code's default Explorer exclusions while preserving visible dotfiles such as
+`.github`, `.vscode`, and `.gitignore`.
+
 ## Follow modes
 
 - **Follow** makes the focused pane's CWD the sole visible explorer root. Only
@@ -111,10 +123,11 @@ Explorer state is stored atomically as JSON at:
 ~/Library/Application Support/cosmos-term/workspace-state.json
 ```
 
-The file contains sidebar width, roots and labels, expanded directories,
-follow mode, and hidden-file preference. A legacy visibility field is retained
-for state compatibility but ignored because the explorer is now a permanent
-workbench region. Cached listings and pane context are intentionally transient.
+The file contains a layout version, sidebar width, roots and labels, expanded
+directories, follow mode, and hidden-file preference. A legacy visibility
+field is retained for state compatibility but ignored because the explorer is
+now a permanent workbench region. Cached listings, Git status, and pane context
+are intentionally transient.
 
 ## Isolation
 

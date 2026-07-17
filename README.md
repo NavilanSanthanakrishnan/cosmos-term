@@ -15,11 +15,13 @@ was installed when this fork was created.
 ## V1
 
 - Native, persistent, resizable explorer beside terminal tabs and splits
-- Code OSS Dark Modern workbench styling with a 48 px Activity Bar,
-  proportional UI text, 28 px tree rows, an explicit follow-mode control,
-  and native vector tree/file/folder controls
+- Code OSS Dark Modern Explorer styling with a 35 px title, compact 22 px
+  tree rows, proportional UI text, Seti-style colored file icons, and native
+  chevrons and selection states
 - Roomier defaults: a 420 px explorer, 14 pt text, and a 100 × 32 terminal
   viewport
+- Right-aligned Git decorations for modified, added, deleted, renamed,
+  untracked, and conflicted files, resolved off the render thread
 - Folder-scoped Follow mode: the focused pane's working directory is the only
   visible root, so parent and sibling folders are not shown
 - tmux-aware reveal based on the selected tmux pane, including pane changes
@@ -37,13 +39,13 @@ and not an editor embedding a terminal.
 
 ## Explorer controls
 
-The explorer is always visible. Its Activity Bar icon focuses it, and the
-legacy `Command+Shift+E` chord is intentionally inert. The header controls are:
+The explorer is always visible, and the legacy `Command+Shift+E` chord is
+intentionally inert. The header matches VS Code's compact `EXPLORER` title and
+single ellipsis action. Clicking the ellipsis cycles the follow mode; it turns
+blue while the view is Locked.
 
-- labeled `FOLLOW` / `PROJECT` / `LOCKED`: cycle the follow mode
-- folder-plus: add a workspace root and lock the view to it
-- target: reveal the active pane
-- eye: hide or show dotfiles
+Dotfiles are shown by default to match the reference project view, except for
+repository/runtime metadata such as `.git` and `.DS_Store`.
 
 Click a row to select and expand/collapse it. Double-click a directory to open
 it in a new tab. Drag the divider to resize the sidebar.
@@ -128,7 +130,8 @@ by Wez Furlong and contributors. The original copyright, MIT license, bundled
 font licenses, and upstream history are retained. Cosmos-specific work is also
 distributed under the repository's MIT license.
 
-The explorer's layout metrics and Dark Modern palette are based on the
-MIT-licensed [Microsoft Code - OSS](https://github.com/microsoft/vscode)
-explorer, list/tree, pane-header, and default-theme sources. Cosmos Term uses
-its own native renderer and vector icons; it does not bundle or launch VS Code.
+The explorer's layout metrics, Dark Modern palette, and Seti icon conventions
+are based on the MIT-licensed
+[Microsoft Code - OSS](https://github.com/microsoft/vscode) explorer,
+list/tree, pane-header, default-theme, and Seti-theme sources. Cosmos Term uses
+its own native renderer; it does not bundle or launch VS Code.

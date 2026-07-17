@@ -17,15 +17,20 @@ explorer and using independent application/runtime identities.
 - Signed arm64 macOS bundle launches as `Cosmos Term` with bundle ID
   `com.navilan.cosmos-term`.
 - The explorer renders and remains resizable beside normal terminal content.
-- The explorer now follows Code OSS Dark Modern layout and color metrics with
-  proportional Helvetica labels and native vector controls/icons.
-- The workbench now has a 48 px Activity Bar, 420 px default explorer, 44 px
-  title, 28 px rows, 14 pt UI/terminal text, and a 100 × 32 initial terminal.
-- The explorer is permanently visible. `Command+Shift+E` is an inert `Nop`,
-  and the Activity Bar icon focuses rather than hides the sidebar.
-- Follow state is a labeled header control. With explorer focus, `L` visibly
-  toggles Follow ↔ Locked; clicking a terminal pane reliably returns keyboard
-  focus so `.` and Return cannot leak into explorer actions.
+- The explorer now matches the supplied VS Code reference: Code OSS Dark
+  Modern colors, a 35 px title, 22 px rows, 8 px indentation, proportional
+  Helvetica labels, native chevrons, and colored Seti/Nerd file icons.
+- The 420 px default remains intentionally roomy, with 14 pt terminal text and
+  a 100 × 32 initial terminal, while the Explorer itself uses VS Code's compact
+  density and pixel-snapped glyph placement.
+- The Activity Bar, visible mode badge, and custom toolbar were removed. The
+  default header is `EXPLORER` plus one ellipsis, matching the reference.
+- The explorer is permanently visible and `Command+Shift+E` is an inert `Nop`.
+  With explorer focus, `L` toggles Follow ↔ Locked and the ellipsis turns blue
+  while Locked; clicking a terminal pane reliably returns keyboard focus.
+- Dotfiles are visible by default, while `.git` and `.DS_Store` follow VS Code
+  exclusions. Git status is loaded on a worker and rendered as right-aligned,
+  color-coded file decorations such as `M`.
 - In Follow mode, native `cd` changes make the new CWD the sole visible root;
   parent and sibling folders are excluded. Project Follow scopes to the Git
   root, while Locked holds the displayed root.
@@ -43,7 +48,8 @@ explorer and using independent application/runtime identities.
 - `Command+W` is a direct, unconfirmed `CloseCurrentTab`; a live two-tab test
   closed only the active tab. `Command+Q` retains protected autosave/close.
 - Folder-scoped row generation has unit coverage for excluding both saved
-  sibling roots and parent-directory siblings.
+  sibling roots and parent-directory siblings; Git porcelain parsing and
+  layout migration are covered as well.
 
 ## Verification commands
 
