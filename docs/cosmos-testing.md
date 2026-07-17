@@ -10,7 +10,7 @@ cargo check -p wezterm-gui -p wezterm -p wezterm-mux-server
 git diff --check
 ```
 
-The workspace tests cover follow expansion, Locked behavior, root matching and
+The workspace tests cover legacy follow-state compatibility, root matching and
 deduplication, folder-scoped row isolation, layout migration, Git porcelain
 parsing, directory sorting/filtering, persistence, and process detection.
 
@@ -28,8 +28,10 @@ Confirm that the bundle contains `cosmos-term-gui`, `cosmos-term`, and
 `com.navilan.cosmos-term`.
 
 The old `glium` dependency must retain its package-specific release
-`opt-level = 0`. Test the default OpenGL renderer; a WebGPU-only success does
-not verify the configured default.
+`opt-level = 0` for compatibility. The bundled Cosmos config intentionally
+selects WebGPU because its sRGB surface preserves VS Code theme values on both
+standard and wide-gamut macOS displays. Validate that configured default at
+both 72 and 144 DPI.
 
 ## Config and protocol isolation
 
@@ -43,8 +45,9 @@ env \
 ```
 
 The command must load the bundled Cosmos config, list `Command+Shift+E` as
-`Nop`, and contain no key assignment that hides the explorer. It must not
-require or connect to WezTerm.
+`Nop`, list `Command+W` as unconfirmed `CloseCurrentTab`, and contain no key
+assignment that hides, locks, or changes Explorer scope. It must not require or
+connect to WezTerm.
 
 When Cosmos is launched from inside an existing WezTerm/tmux pane, inspect the
 new Cosmos shell:
@@ -61,28 +64,33 @@ It must print no inherited WezTerm protocol/config values and no stale
 Use only panes created in Cosmos Term.
 
 1. Launch with a known repository CWD and confirm that folder is the sole
-   visible root.
+   visible root. No saved historical root may flash before it resolves.
 2. Run `cd` into a nested directory and confirm it becomes the sole visible
    root without parent or sibling folders.
 3. Create a split with a different CWD. Switch focus in both directions and
    confirm the highlight and status follow the focused pane.
 4. Create and remove a directory under an expanded root. Confirm it appears
    and disappears without restarting.
-5. Resize the divider, change expansion state, restart, and confirm the width,
-   roots, expansion, and follow mode persist.
-6. Select Locked, change the terminal CWD, and confirm the visible root and
-   expansion state remain byte-for-byte unchanged.
-7. Open a selected directory in a tab and a split.
-8. Use an invalid or inaccessible root and confirm an inline error without a
+5. Resize the divider, change expansion state, restart, and confirm the width
+   and reachable expansion state persist while the new pane CWD remains the
+   sole root.
+6. Open a selected directory in a tab and a split.
+7. Use an invalid or inaccessible root and confirm an inline error without a
    crash or blocked terminal.
-9. Focus an Explorer row and press `L` twice. Confirm the ellipsis accent and
-   persisted mode change Follow → Locked → Follow without hiding the sidebar.
-10. Click the terminal, type a command containing `.` and press Return. Confirm
+8. Focus an Explorer row and press `L`. Confirm literal `l` reaches the shell
+   and the Explorer remains visible; there is no lock or hide binding.
+9. Click the terminal, type a command containing `.` and press Return. Confirm
     the command reaches the shell and no explorer action runs.
-11. Press `Command+Shift+E` and confirm the sidebar remains visible and no `E`
+10. Press `Command+Shift+E` and confirm the sidebar remains visible and no `E`
     reaches the shell.
-12. In a Git worktree, modify a visible file and confirm a right-aligned `M`
+11. In a Git worktree, modify a visible file and confirm a right-aligned `M`
     appears and refreshes without blocking terminal input.
+12. Press `Command+W` and confirm the current tab closes immediately without a
+    confirmation dialog.
+13. Capture native window screenshots on 72 DPI and 144 DPI displays. Confirm
+    the Explorer remains 420 logical pixels wide with a 35 px title, 22 px
+    rows, 11/13 px text, and exact `#252526` background and `#37373D` inactive
+    selection pixels on the 72 DPI reference display.
 
 ## Isolated tmux matrix
 

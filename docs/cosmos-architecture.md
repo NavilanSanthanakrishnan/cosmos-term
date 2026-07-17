@@ -18,9 +18,9 @@ process embedded beside the terminal.
 This crate owns UI-independent workspace behavior:
 
 - serializable explorer state and atomic persistence
-- workspace root add/remove/rename/reorder operations
-- Follow, Project Follow, and Locked expansion semantics
-- project-root discovery
+- compatibility loading and migration of legacy workspace-root/follow state
+- exact active-pane-directory scoping
+- project-root discovery for Git decorations
 - lazy direct-directory listings and stable sorting
 - row generation for expanded directories
 - pane-context resolution for native panes and tmux
@@ -44,8 +44,11 @@ The native window adapter owns:
 - persisted `ExplorerUi` state
 - active-pane polling and context application
 - Code OSS primary-sidebar title and exact compact tree geometry, proportional
-  row text, bundled Seti-style glyphs, native chevrons, Git decorations, list
-  highlights, and inline errors
+  macOS system UI row text, the bundled Code OSS Seti font, native chevrons,
+  Git decorations, list highlights, and inline errors
+- logical-to-physical DPI scaling for the complete Explorer and WebGPU color
+  output that preserves the reference CSS values on standard and wide-gamut
+  displays
 - mouse hit targets, scrolling, divider drag, and row activation
 - keyboard navigation and root prompts
 - spawning selected directories into tabs or splits
@@ -69,11 +72,12 @@ The surrounding changes are intentionally limited to:
 
 ## Pane following
 
-For a native pane, WezTerm's reported CWD is used. The explorer resolves the
-longest matching saved workspace root, discovers a containing Git project,
-and applies the selected follow mode. The visible root is transient and
-independent from saved multi-root state, which prevents parent or sibling
-roots from leaking into a folder-scoped view.
+For a native pane, WezTerm's reported CWD is used as the sole visible Explorer
+root. The visible root is transient and independent from serialized legacy
+multi-root state, which prevents a previous root, parent, or sibling from
+leaking into the current-folder view. A containing Git project may still be
+discovered independently for status decorations; it never changes the visible
+root.
 
 For tmux, the native terminal pane still reports the outer shell's CWD, so the
 foreground process and TTY are also inspected. When the foreground process is
@@ -105,15 +109,19 @@ the right edge of their rows. `.git` itself remains excluded, matching VS
 Code's default Explorer exclusions while preserving visible dotfiles such as
 `.github`, `.vscode`, and `.gitignore`.
 
-## Follow modes
+## Current-folder policy
 
-- **Follow** makes the focused pane's CWD the sole visible explorer root. Only
-  that folder's contents are shown.
-- **Project Follow** makes the detected Git project the sole visible root and
-  reveals the focused CWD within it.
-- **Locked** holds the current visible root and expansion state while terminal
-  CWD changes continue.
-- **Reveal Active** explicitly switches a Locked view to the focused CWD.
+The Explorer is permanently enabled and always follows the active pane's exact
+CWD. There is no user-facing Project Follow, Locked, or hide state. Legacy
+follow-mode values remain deserializable so existing state files migrate
+without loss, but runtime context application forces current-folder Follow.
+The header ellipsis and compatibility command actions simply reveal the active
+pane again.
+
+Directory requests are root-first and lazy. Persisted expanded descendants are
+requested only after they become reachable through the currently rendered
+tree. This prevents an unavailable historical descendant from delaying the
+new active root.
 
 ## Persistence
 
@@ -123,11 +131,11 @@ Explorer state is stored atomically as JSON at:
 ~/Library/Application Support/cosmos-term/workspace-state.json
 ```
 
-The file contains a layout version, sidebar width, roots and labels, expanded
-directories, follow mode, and hidden-file preference. A legacy visibility
-field is retained for state compatibility but ignored because the explorer is
-now a permanent workbench region. Cached listings, Git status, and pane context
-are intentionally transient.
+The file contains a layout version, sidebar width, expanded directories,
+hidden-file preference, and legacy roots/follow/visibility fields. The legacy
+fields are retained for state compatibility but cannot hide, lock, or widen
+the runtime scope beyond the active pane directory. Cached listings, Git
+status, and pane context are intentionally transient.
 
 ## Isolation
 

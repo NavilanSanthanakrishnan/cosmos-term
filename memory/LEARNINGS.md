@@ -27,18 +27,29 @@
 - `render_screen_line` retains terminal-cell placement even when supplied a
   proportional font. Native sidebar labels need box-model shaping and direct
   glyph quad emission. Snap screen-space glyph origins to whole pixels before
-  applying the centered render offset; this materially improves small
-  Helvetica Neue labels. The private `.SF NS` family is present on disk but is
-  not resolvable by this baseline's CoreText locator.
-- The bundled `Symbols Nerd Font Mono` contains Seti UI file glyphs with stable
-  codepoints, so the Explorer can match Code OSS file-type shapes without
-  importing a second icon font. Keep Git status invocation on its own worker
-  and parse NUL-delimited porcelain output so spaces and renames remain safe.
-- Keep the active explorer display root transient and separate from persisted
-  multi-root state. Follow can then scope directly to the pane CWD without
-  adding every visited folder or exposing saved parents/siblings; Project
-  Follow and Locked can select different display-root policies over the same
-  cached listings.
+  applying the centered render offset; this materially improves small UI
+  labels. This baseline's CoreText locator does not enumerate Apple's private
+  system-font alias, but its FreeType parser can register the OS-owned
+  `/System/Library/Fonts/SFNS.ttf` face as `System Font` without redistributing
+  it.
+- For exact VS Code file icons, embed Code OSS's Seti font and retain its MIT
+  license; visually similar Nerd Font glyphs use different outlines and
+  codepoints. Keep Git status invocation on its own worker and parse
+  NUL-delimited porcelain output so spaces and renames remain safe.
+- Keep the active Explorer display root transient and separate from persisted
+  legacy multi-root state. Runtime context application must force the active
+  pane's exact CWD as the sole root so historical roots, parents, and siblings
+  cannot leak into the tree.
+- Treat Explorer geometry as logical CSS pixels and scale the complete layout
+  at the window DPI. Scaling only the font or only row constants causes overlap
+  or a tiny sidebar when moving between standard and Retina displays.
+- Native CoreGraphics captures are required for renderer validation; app
+  previews can hide DPI and color-profile errors. On this macOS baseline,
+  WebGPU's sRGB surface emits the VS Code `#252526` sidebar value exactly,
+  while the legacy OpenGL path visibly lifts it on wide-gamut displays.
+- Queue the active display root before any expanded descendants. Derive later
+  requests from directories reachable through the currently rendered tree so
+  an unavailable stale expansion cannot block the current CWD.
 - Normal tab close should remain independent from whole-application protection:
   bind `Command+W` directly to `CloseCurrentTab`, and reserve close-lock plus
   autosave for `Command+Q`.

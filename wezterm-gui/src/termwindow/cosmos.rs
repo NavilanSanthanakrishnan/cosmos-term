@@ -10,13 +10,14 @@ use ::window::{
 use config::keyassignment::{SpawnCommand, SpawnTabDomain};
 use config::{DimensionContext, FontAttributes, FontWeight, TextStyle};
 use cosmos_workspace::{
-    ancestors_from_root, expand_home, DirectoryCache, ExplorerRow, ExplorerRowKind, ExplorerState,
-    FollowMode, GitFileStatus, PaneContext, PaneContextRequest, ServiceResponse, WorkspaceRoot,
+    expand_home, DirectoryCache, ExplorerRow, ExplorerRowKind, ExplorerState, FollowMode,
+    GitFileStatus, PaneContext, PaneContextRequest, ServiceResponse, WorkspaceRoot,
     WorkspaceService, MAX_SIDEBAR_WIDTH, MIN_SIDEBAR_WIDTH,
 };
 use mux::pane::CachePolicy;
 use mux::tab::{SplitDirection, SplitRequest, SplitSize};
 use mux::Mux;
+use ordered_float::NotNan;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -28,6 +29,9 @@ use termwiz::surface::Change;
 use termwiz::terminal::Terminal;
 use unicode_width::UnicodeWidthStr;
 
+// VS Code defines these values in logical CSS pixels. Convert the complete
+// explorer layout to physical pixels at the window DPI so its apparent size
+// remains stable across standard and Retina displays.
 const DIVIDER_WIDTH: usize = 1;
 const DIVIDER_HIT_WIDTH: usize = 7;
 const TITLE_HEIGHT: usize = 35;
@@ -37,11 +41,30 @@ const TREE_LEFT: usize = 4;
 const TREE_INDENT: usize = 8;
 const ICON_SIZE: usize = 16;
 const ACTION_SIZE: usize = 22;
+const SCROLLBAR_SIZE: usize = 10;
+const EXPLORER_HEADER_FONT_LOGICAL_SIZE: f64 = 11.0;
+const EXPLORER_BODY_FONT_LOGICAL_SIZE: f64 = 13.0;
+const EXPLORER_ICON_FONT_LOGICAL_SIZE: f64 = 16.0;
+#[cfg(target_os = "macos")]
+const EXPLORER_UI_FONT_FAMILY: &str = "System Font";
+#[cfg(not(target_os = "macos"))]
+const EXPLORER_UI_FONT_FAMILY: &str = "Helvetica Neue";
 const VIRTUAL_ROOT_INDEX: usize = usize::MAX;
 const CONTEXT_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const DIRECTORY_REFRESH_INTERVAL: Duration = Duration::from_secs(2);
 
-const SIDEBAR_BG: RgbColor = RgbColor::new_8bpc(24, 24, 24);
+fn logical_to_physical(value: usize, dpi: usize) -> usize {
+    if value == 0 {
+        return 0;
+    }
+    ((value as f64 * dpi.max(1) as f64 / 72.).round() as usize).max(1)
+}
+
+fn physical_to_logical(value: usize, dpi: usize) -> usize {
+    ((value as f64 * 72. / dpi.max(1) as f64).round() as usize).max(1)
+}
+
+const SIDEBAR_BG: RgbColor = RgbColor::new_8bpc(37, 37, 38);
 const DIVIDER: RgbColor = RgbColor::new_8bpc(43, 43, 43);
 const TEXT: RgbColor = RgbColor::new_8bpc(204, 204, 204);
 const MUTED: RgbColor = RgbColor::new_8bpc(157, 157, 157);
@@ -49,7 +72,8 @@ const INDENT_GUIDE: RgbColor = RgbColor::new_8bpc(50, 50, 50);
 const HOVER_BG: RgbColor = RgbColor::new_8bpc(42, 45, 46);
 const INACTIVE_SELECTION_BG: RgbColor = RgbColor::new_8bpc(55, 55, 61);
 const ACTIVE_SELECTION_BG: RgbColor = RgbColor::new_8bpc(4, 57, 94);
-const ACCENT: RgbColor = RgbColor::new_8bpc(0, 120, 212);
+// VS Code's dark scrollbar is #797979 at 40% over the #252526 sidebar.
+const SCROLLBAR: RgbColor = RgbColor::new_8bpc(71, 71, 71);
 const ERROR: RgbColor = RgbColor::new_8bpc(248, 128, 112);
 
 const CHEVRON_RIGHT: &[Poly] = &[Poly {
@@ -83,34 +107,45 @@ fn explorer_file_icon(path: &Path) -> (&'static str, RgbColor) {
         .unwrap_or_default();
 
     if name == "yarn.lock" || name.starts_with("yarn.") {
-        return ("\u{e6a7}", RgbColor::new_8bpc(81, 154, 186));
+        return ("\u{e0a6}", RgbColor::new_8bpc(81, 154, 186));
     }
     if name.starts_with("readme") {
-        return ("\u{e66a}", RgbColor::new_8bpc(81, 154, 186));
+        return ("\u{e04d}", RgbColor::new_8bpc(81, 154, 186));
     }
     if name.starts_with(".git") {
-        return ("\u{e65d}", RgbColor::new_8bpc(227, 121, 51));
+        return ("\u{e034}", RgbColor::new_8bpc(65, 83, 91));
+    }
+    if name.starts_with("license") || name.starts_with("licence") || name.starts_with("copying") {
+        return ("\u{e05a}", RgbColor::new_8bpc(203, 203, 65));
+    }
+    if name == "makefile" || name == "gnumakefile" {
+        return ("\u{e05f}", RgbColor::new_8bpc(227, 121, 51));
+    }
+    if name == "dockerfile" || name.starts_with("dockerfile.") {
+        return ("\u{e025}", RgbColor::new_8bpc(81, 154, 186));
     }
 
     match extension.as_str() {
-        "js" | "cjs" | "mjs" => ("\u{e60c}", RgbColor::new_8bpc(203, 203, 65)),
-        "jsx" => ("\u{e625}", RgbColor::new_8bpc(81, 154, 186)),
-        "ts" => ("\u{e628}", RgbColor::new_8bpc(81, 154, 186)),
-        "tsx" => ("\u{e625}", RgbColor::new_8bpc(81, 154, 186)),
-        "css" | "scss" | "sass" | "less" => ("\u{e614}", RgbColor::new_8bpc(81, 154, 186)),
-        "json" | "jsonc" => ("\u{e60b}", RgbColor::new_8bpc(203, 203, 65)),
-        "svg" => ("\u{e698}", RgbColor::new_8bpc(160, 116, 196)),
-        "md" | "mdx" | "markdown" => ("\u{e609}", RgbColor::new_8bpc(81, 154, 186)),
-        "html" | "htm" => ("\u{e60e}", RgbColor::new_8bpc(227, 121, 51)),
-        "xml" => ("\u{e619}", RgbColor::new_8bpc(227, 121, 51)),
+        "js" | "cjs" | "mjs" => ("\u{e051}", RgbColor::new_8bpc(203, 203, 65)),
+        "jsx" | "tsx" => ("\u{e07d}", RgbColor::new_8bpc(81, 154, 186)),
+        "ts" => ("\u{e099}", RgbColor::new_8bpc(81, 154, 186)),
+        "css" | "less" => ("\u{e01d}", RgbColor::new_8bpc(81, 154, 186)),
+        "scss" | "sass" => ("\u{e084}", RgbColor::new_8bpc(245, 83, 133)),
+        "json" | "jsonc" => ("\u{e055}", RgbColor::new_8bpc(203, 203, 65)),
+        "svg" => ("\u{e091}", RgbColor::new_8bpc(160, 116, 196)),
+        "md" | "mdx" | "markdown" => ("\u{e060}", RgbColor::new_8bpc(81, 154, 186)),
+        "html" | "htm" => ("\u{e048}", RgbColor::new_8bpc(227, 121, 51)),
+        "xml" => ("\u{e0a5}", RgbColor::new_8bpc(227, 121, 51)),
         "png" | "jpg" | "jpeg" | "gif" | "webp" | "ico" => {
-            ("\u{e60d}", RgbColor::new_8bpc(160, 116, 196))
+            ("\u{e04c}", RgbColor::new_8bpc(160, 116, 196))
         }
-        "rs" => ("\u{e68b}", RgbColor::new_8bpc(204, 62, 68)),
-        "py" => ("\u{e606}", RgbColor::new_8bpc(81, 154, 186)),
-        "sh" | "zsh" | "bash" => ("\u{e691}", RgbColor::new_8bpc(141, 193, 73)),
-        "lock" => ("\u{e672}", RgbColor::new_8bpc(109, 128, 134)),
-        _ => ("\u{e64e}", RgbColor::new_8bpc(212, 215, 214)),
+        "rs" => ("\u{e082}", RgbColor::new_8bpc(109, 128, 134)),
+        "py" => ("\u{e07b}", RgbColor::new_8bpc(81, 154, 186)),
+        "sh" | "zsh" | "bash" => ("\u{e089}", RgbColor::new_8bpc(141, 193, 73)),
+        "toml" | "ini" | "conf" | "config" => ("\u{e019}", RgbColor::new_8bpc(109, 128, 134)),
+        "lock" | "key" | "pem" | "crt" | "cert" => ("\u{e05d}", RgbColor::new_8bpc(141, 193, 73)),
+        "ttf" | "otf" | "woff" | "woff2" => ("\u{e033}", RgbColor::new_8bpc(204, 62, 68)),
+        _ => ("\u{e023}", RgbColor::new_8bpc(212, 215, 214)),
     }
 }
 
@@ -125,7 +160,7 @@ fn git_status_color(status: GitFileStatus) -> RgbColor {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExplorerHeaderAction {
-    CycleFollowMode,
+    RevealActive,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -181,10 +216,13 @@ impl ExplorerUi {
         // The explorer is a permanent part of the Cosmos workbench. Keep the
         // serialized field for state compatibility, but never restore hidden.
         state.visible = true;
-        let display_root = state.roots.first().cloned();
-        if let Some(root) = &display_root {
-            state.expanded.insert(root.path.clone());
-        }
+        // Always present the active pane's directory as the single visible
+        // workspace root. Historical roots remain serialized for compatibility
+        // but must not pin the tree to an unrelated directory.
+        state.follow_mode = FollowMode::Follow;
+        // Wait for the active pane context instead of flashing a stale saved
+        // root from an unrelated prior shell directory.
+        let display_root = None;
         Self {
             state,
             state_path,
@@ -216,8 +254,8 @@ impl ExplorerUi {
         }
     }
 
-    pub fn total_width(&self) -> usize {
-        self.state.width_px + DIVIDER_WIDTH
+    pub fn total_width(&self, dpi: usize) -> usize {
+        logical_to_physical(self.state.width_px + DIVIDER_WIDTH, dpi)
     }
 
     fn persist(&mut self) {
@@ -234,25 +272,47 @@ impl ExplorerUi {
     }
 
     fn request_expanded_directories(&mut self) {
-        let display_root = self.display_root.as_ref().map(|root| root.path.clone());
-        let expanded = self
-            .state
-            .expanded
-            .iter()
-            .filter(|path| {
-                path.is_dir()
-                    && display_root
-                        .as_ref()
-                        .map(|root| path.as_path() == root || path.starts_with(root))
-                        .unwrap_or(true)
-            })
-            .cloned()
-            .collect::<HashSet<_>>();
+        let root = match self.display_root.as_ref() {
+            Some(root) => root,
+            None => {
+                if !self.watched_directories.is_empty() {
+                    self.watched_directories.clear();
+                    self.service.watch_directories(HashSet::new());
+                }
+                return;
+            }
+        };
+        let root_index = self
+            .exact_root_index(&root.path)
+            .unwrap_or(VIRTUAL_ROOT_INDEX);
+        let mut ordered = vec![root.path.clone()];
+        // Only queue expanded directories reachable through the currently
+        // loaded tree. This preserves lazy loading and prevents stale deep
+        // expansions (including offline folders) from running before the cwd.
+        for row in self.cache.rows_for_root(&self.state, root, root_index) {
+            if row.expanded
+                && matches!(row.kind, ExplorerRowKind::Root | ExplorerRowKind::Directory)
+            {
+                if let Some(path) = row.path {
+                    if path != root.path {
+                        ordered.push(path);
+                    }
+                }
+            }
+        }
+        ordered.sort_by(|left, right| {
+            left.components()
+                .count()
+                .cmp(&right.components().count())
+                .then_with(|| left.cmp(right))
+        });
+        ordered.dedup();
+        let expanded = ordered.iter().cloned().collect::<HashSet<_>>();
         if expanded != self.watched_directories {
             self.watched_directories = expanded.clone();
             self.service.watch_directories(expanded.clone());
         }
-        for path in expanded {
+        for path in ordered {
             self.request_directory(path);
         }
     }
@@ -321,7 +381,7 @@ impl ExplorerUi {
         changed || expanded
     }
 
-    fn apply_context(&mut self, context: PaneContext, reveal_even_if_locked: bool) -> bool {
+    fn apply_context(&mut self, context: PaneContext, reveal_active: bool) -> bool {
         self.context_request_in_flight = false;
         let prior = self.active_context.clone();
         let context_changed = prior.as_ref() != Some(&context);
@@ -330,37 +390,15 @@ impl ExplorerUi {
 
         if let Some(cwd) = context.cwd.clone() {
             let prior_state = self.state.clone();
-            let should_update_root = reveal_even_if_locked
-                || self.state.follow_mode != FollowMode::Locked
-                || self.display_root.is_none();
-            if should_update_root {
-                let root_path = match self.state.follow_mode {
-                    FollowMode::Follow | FollowMode::Locked => cwd.clone(),
-                    FollowMode::ProjectFollow => context
-                        .project_root
-                        .clone()
-                        .or(context.workspace_root.clone())
-                        .unwrap_or_else(|| cwd.clone()),
-                };
-                let root_changed = self.set_display_root(root_path.clone(), reveal_even_if_locked);
-                changed |= root_changed;
-
-                if self.state.follow_mode == FollowMode::ProjectFollow
-                    && cwd.starts_with(&root_path)
-                    && (root_changed || context_changed || reveal_even_if_locked)
-                {
-                    for ancestor in ancestors_from_root(&root_path, &cwd) {
-                        self.state.expanded.insert(ancestor);
-                    }
-                }
-                if root_changed || !self.focused {
-                    self.selected_path =
-                        Some(if self.state.follow_mode == FollowMode::ProjectFollow {
-                            cwd.clone()
-                        } else {
-                            root_path
-                        });
-                }
+            // Cosmos intentionally differs from a multi-root editor workspace:
+            // the explorer is a permanent view of the active pane's exact
+            // working directory. Serialized follow modes are retained only for
+            // backward-compatible state loading.
+            self.state.follow_mode = FollowMode::Follow;
+            let root_changed = self.set_display_root(cwd.clone(), reveal_active);
+            changed |= root_changed;
+            if root_changed || !self.focused {
+                self.selected_path = Some(cwd);
             }
             self.request_expanded_directories();
             if self.state != prior_state {
@@ -387,7 +425,10 @@ impl ExplorerUi {
                 .unwrap_or(VIRTUAL_ROOT_INDEX);
             self.cache.rows_for_root(&self.state, root, root_index)
         } else {
-            self.cache.rows(&self.state)
+            // The explorer has no display scope until the active pane context
+            // resolves. Historical serialized roots must never flash in the
+            // permanent current-directory view.
+            vec![]
         };
         if let Some(error) = &self.last_error {
             self.rows.push(ExplorerRow {
@@ -547,7 +588,7 @@ fn truncate_to_width(text: &str, max_width: usize) -> String {
 
 impl TermWindow {
     pub fn explorer_width(&self) -> usize {
-        self.explorer.total_width()
+        self.explorer.total_width(self.dimensions.dpi)
     }
 
     pub fn terminal_origin_x(&self) -> usize {
@@ -707,26 +748,15 @@ impl TermWindow {
     }
 
     pub fn cycle_explorer_follow_mode(&mut self) {
-        self.explorer.state.follow_mode = self.explorer.state.follow_mode.next();
+        self.explorer.state.follow_mode = FollowMode::Follow;
         self.explorer.persist();
-        if self.explorer.state.follow_mode != FollowMode::Locked {
-            self.reveal_active_in_explorer();
-        }
+        self.reveal_active_in_explorer();
     }
 
     pub fn toggle_explorer_lock(&mut self) {
-        let was_locked = self.explorer.state.follow_mode == FollowMode::Locked;
-        self.explorer.state.follow_mode = if was_locked {
-            FollowMode::Follow
-        } else {
-            FollowMode::Locked
-        };
+        self.explorer.state.follow_mode = FollowMode::Follow;
         self.explorer.persist();
-        if was_locked {
-            self.reveal_active_in_explorer();
-        } else if let Some(window) = self.window.as_ref() {
-            window.invalidate();
-        }
+        self.reveal_active_in_explorer();
     }
 
     pub fn toggle_explorer_hidden_files(&mut self) {
@@ -799,8 +829,7 @@ impl TermWindow {
                     return;
                 }
                 let index = self.explorer.state.add_root(path.clone());
-                self.explorer.state.follow_mode = FollowMode::Locked;
-                self.explorer.set_display_root(path.clone(), true);
+                self.explorer.state.follow_mode = FollowMode::Follow;
                 self.explorer.selected_path = Some(path);
                 self.explorer.selected_root = Some(index);
                 self.explorer.persist();
@@ -905,20 +934,6 @@ impl TermWindow {
             (KeyCode::Char('a'), Modifiers::NONE) => {
                 self.show_explorer_prompt(ExplorerPromptKind::AddRoot)
             }
-            (KeyCode::Char('f'), Modifiers::NONE) => {
-                self.explorer.state.follow_mode = FollowMode::Follow;
-                self.explorer.persist();
-                self.reveal_active_in_explorer();
-            }
-            (KeyCode::Char('p'), Modifiers::NONE) => {
-                self.explorer.state.follow_mode = FollowMode::ProjectFollow;
-                self.explorer.persist();
-                self.reveal_active_in_explorer();
-            }
-            (KeyCode::Char('l'), Modifiers::NONE)
-            | (KeyCode::Char('L'), Modifiers::NONE)
-            | (KeyCode::Char('l'), Modifiers::SHIFT)
-            | (KeyCode::Char('L'), Modifiers::SHIFT) => self.toggle_explorer_lock(),
             (KeyCode::Char('r'), Modifiers::NONE) => self.reveal_active_in_explorer(),
             (KeyCode::Char('.'), Modifiers::NONE) => self.toggle_explorer_hidden_files(),
             _ => return false,
@@ -940,6 +955,7 @@ impl TermWindow {
         foreground: RgbColor,
         _background: RgbColor,
         bold: bool,
+        logical_font_size: f64,
     ) -> anyhow::Result<()> {
         self.render_explorer_text(
             layers,
@@ -949,8 +965,9 @@ impl TermWindow {
             width,
             height,
             foreground,
-            "Helvetica Neue",
+            EXPLORER_UI_FONT_FAMILY,
             bold,
+            logical_font_size,
         )
     }
 
@@ -972,8 +989,9 @@ impl TermWindow {
             width,
             height,
             foreground,
-            "Symbols Nerd Font Mono",
+            "seti",
             false,
+            EXPLORER_ICON_FONT_LOGICAL_SIZE,
         )
     }
 
@@ -988,8 +1006,12 @@ impl TermWindow {
         foreground: RgbColor,
         family: &str,
         bold: bool,
+        logical_font_size: f64,
     ) -> anyhow::Result<()> {
         let mut attributes = FontAttributes::new(family);
+        let configured_font_size = self.config.font_size * self.fonts.get_font_scale();
+        let explorer_scale = logical_font_size / configured_font_size;
+        attributes.scale = Some(NotNan::new(explorer_scale).unwrap());
         if bold {
             attributes.weight = FontWeight::BOLD;
         }
@@ -1120,17 +1142,28 @@ impl TermWindow {
     pub fn paint_explorer(&mut self, layers: &mut TripleLayerQuadAllocator) -> anyhow::Result<()> {
         self.explorer.request_expanded_directories();
 
+        let dpi = self.dimensions.dpi;
+        let scale = |value| logical_to_physical(value, dpi);
+        let divider_width = scale(DIVIDER_WIDTH);
+        let divider_hit_width = scale(DIVIDER_HIT_WIDTH);
+        let title_height = scale(TITLE_HEIGHT);
+        let row_height = scale(ROW_HEIGHT);
+        let title_left = scale(TITLE_LEFT);
+        let tree_left = scale(TREE_LEFT);
+        let tree_indent = scale(TREE_INDENT);
+        let icon_size = scale(ICON_SIZE);
+        let action_size = scale(ACTION_SIZE);
         let border = self.get_os_border();
-        let width = self.explorer.state.width_px;
+        let width = scale(self.explorer.state.width_px);
         let top = border.top.get();
         let bottom = self
             .dimensions
             .pixel_height
             .saturating_sub(border.bottom.get());
-        let tree_top = top + TITLE_HEIGHT;
+        let tree_top = top + title_height;
         let tree_bottom = bottom;
         let tree_height = tree_bottom.saturating_sub(tree_top);
-        let capacity = tree_height / ROW_HEIGHT;
+        let capacity = tree_height / row_height;
         self.explorer.rebuild_rows(capacity);
 
         self.filled_rectangle(
@@ -1145,7 +1178,7 @@ impl TermWindow {
             euclid::rect(
                 width as f32,
                 top as f32,
-                DIVIDER_WIDTH as f32,
+                divider_width as f32,
                 (bottom - top) as f32,
             ),
             DIVIDER.to_linear_tuple_rgba(),
@@ -1158,9 +1191,9 @@ impl TermWindow {
             item_type: UIItemType::Explorer(ExplorerUiItem::Surface),
         });
 
-        let action_x = width.saturating_sub(ACTION_SIZE + 8);
-        let action_y = top + (TITLE_HEIGHT - ACTION_SIZE) / 2;
-        let action = ExplorerHeaderAction::CycleFollowMode;
+        let action_x = width.saturating_sub(action_size + scale(8));
+        let action_y = top + (title_height - action_size) / 2;
+        let action = ExplorerHeaderAction::RevealActive;
         if self.explorer_item_hovered(ExplorerUiItem::Header(action)) {
             self.filled_rectangle(
                 layers,
@@ -1168,26 +1201,22 @@ impl TermWindow {
                 euclid::rect(
                     action_x as f32,
                     action_y as f32,
-                    ACTION_SIZE as f32,
-                    ACTION_SIZE as f32,
+                    action_size as f32,
+                    action_size as f32,
                 ),
                 HOVER_BG.to_linear_tuple_rgba(),
             )?;
         }
-        let dot_color = if self.explorer.state.follow_mode == FollowMode::Locked {
-            ACCENT
-        } else {
-            MUTED
-        };
-        for offset in [6usize, 10, 14].iter().copied() {
+        let dot_color = MUTED;
+        for offset in [6usize, 10, 14].iter().copied().map(scale) {
             self.filled_rectangle(
                 layers,
                 1,
                 euclid::rect(
                     (action_x + offset) as f32,
-                    (action_y + ACTION_SIZE / 2) as f32,
-                    2.,
-                    2.,
+                    (action_y + action_size / 2) as f32,
+                    scale(2) as f32,
+                    scale(2) as f32,
                 ),
                 dot_color.to_linear_tuple_rgba(),
             )?;
@@ -1195,22 +1224,23 @@ impl TermWindow {
         self.ui_items.push(UIItem {
             x: action_x,
             y: action_y,
-            width: ACTION_SIZE,
-            height: ACTION_SIZE,
+            width: action_size,
+            height: action_size,
             item_type: UIItemType::Explorer(ExplorerUiItem::Header(action)),
         });
 
-        let header_text_width = action_x.saturating_sub(TITLE_LEFT + 8);
+        let header_text_width = action_x.saturating_sub(title_left + scale(8));
         self.render_explorer_line(
             layers,
             "EXPLORER",
             top as f32,
-            TITLE_LEFT as f32,
+            title_left as f32,
             header_text_width as f32,
-            TITLE_HEIGHT as f32,
+            title_height as f32,
             TEXT,
             SIDEBAR_BG,
             false,
+            EXPLORER_HEADER_FONT_LOGICAL_SIZE,
         )?;
 
         let active_path = self.explorer.active_highlight_path().map(Path::to_path_buf);
@@ -1219,7 +1249,7 @@ impl TermWindow {
         let end = (start + capacity).min(self.explorer.rows.len());
         for (screen_row, row_index) in (start..end).enumerate() {
             let row = self.explorer.rows[row_index].clone();
-            let y = tree_top + screen_row * ROW_HEIGHT;
+            let y = tree_top + screen_row * row_height;
             let hovered = self.explorer_item_hovered(ExplorerUiItem::Row(row_index));
             let is_active = row.path == active_path;
             let is_selected = self.explorer.focused && row.path == selected_path;
@@ -1247,7 +1277,7 @@ impl TermWindow {
                 self.filled_rectangle(
                     layers,
                     0,
-                    euclid::rect(0., y as f32, width as f32, ROW_HEIGHT as f32),
+                    euclid::rect(0., y as f32, width as f32, row_height as f32),
                     background.to_linear_tuple_rgba(),
                 )?;
             }
@@ -1256,7 +1286,12 @@ impl TermWindow {
                 self.filled_rectangle(
                     layers,
                     0,
-                    euclid::rect(0., (y + ROW_HEIGHT - 1) as f32, width as f32, 1.),
+                    euclid::rect(
+                        0.,
+                        (y + row_height - divider_width) as f32,
+                        width as f32,
+                        divider_width as f32,
+                    ),
                     DIVIDER.to_linear_tuple_rgba(),
                 )?;
                 self.draw_explorer_icon(
@@ -1266,39 +1301,44 @@ impl TermWindow {
                     } else {
                         CHEVRON_RIGHT
                     },
-                    4,
-                    y + (ROW_HEIGHT - ICON_SIZE) / 2,
-                    ICON_SIZE,
+                    tree_left,
+                    y + (row_height - icon_size) / 2,
+                    icon_size,
                     TEXT,
                 )?;
-                let root_text_left = 24;
-                let max_cells = width.saturating_sub(root_text_left + 8) / 8;
+                let root_text_left = scale(24);
+                let max_cells = width.saturating_sub(root_text_left + scale(8)) / scale(8);
                 self.render_explorer_line(
                     layers,
                     &truncate_to_width(&row.label.to_uppercase(), max_cells),
                     y as f32,
                     root_text_left as f32,
-                    width.saturating_sub(root_text_left + 8) as f32,
-                    ROW_HEIGHT as f32,
+                    width.saturating_sub(root_text_left + scale(8)) as f32,
+                    row_height as f32,
                     TEXT,
                     background,
                     true,
+                    EXPLORER_BODY_FONT_LOGICAL_SIZE,
                 )?;
             } else {
                 let depth = row.depth.saturating_sub(1);
-                let tree_left = TREE_LEFT;
                 for guide in 0..depth {
-                    let guide_x = tree_left + ICON_SIZE / 2 + guide * TREE_INDENT;
+                    let guide_x = tree_left + icon_size / 2 + guide * tree_indent;
                     self.filled_rectangle(
                         layers,
                         0,
-                        euclid::rect(guide_x as f32, y as f32, 1., ROW_HEIGHT as f32),
+                        euclid::rect(
+                            guide_x as f32,
+                            y as f32,
+                            divider_width as f32,
+                            row_height as f32,
+                        ),
                         INDENT_GUIDE.to_linear_tuple_rgba(),
                     )?;
                 }
 
-                let twistie_x = tree_left + depth * TREE_INDENT;
-                let icon_y = y + (ROW_HEIGHT - ICON_SIZE) / 2;
+                let twistie_x = tree_left + depth * tree_indent;
+                let icon_y = y + (row_height - icon_size) / 2;
                 if matches!(row.kind, ExplorerRowKind::Directory) {
                     self.draw_explorer_icon(
                         layers,
@@ -1309,7 +1349,7 @@ impl TermWindow {
                         },
                         twistie_x,
                         icon_y,
-                        ICON_SIZE,
+                        icon_size,
                         TEXT,
                     )?;
                 } else if row.kind == ExplorerRowKind::File {
@@ -1323,13 +1363,13 @@ impl TermWindow {
                         glyph,
                         y as f32,
                         twistie_x as f32,
-                        ICON_SIZE as f32,
-                        ROW_HEIGHT as f32,
+                        icon_size as f32,
+                        row_height as f32,
                         color,
                     )?;
                 }
 
-                let text_left = twistie_x + ICON_SIZE + 2;
+                let text_left = twistie_x + icon_size + scale(2);
                 let foreground = match row.kind {
                     ExplorerRowKind::Error => ERROR,
                     ExplorerRowKind::Loading | ExplorerRowKind::Truncated => MUTED,
@@ -1337,33 +1377,35 @@ impl TermWindow {
                     _ => TEXT,
                 };
                 let text_right = if git_status.is_some() {
-                    width.saturating_sub(28)
+                    width.saturating_sub(scale(28))
                 } else {
-                    width.saturating_sub(4)
+                    width.saturating_sub(scale(4))
                 };
-                let max_cells = text_right.saturating_sub(text_left + 4) / 8;
+                let max_cells = text_right.saturating_sub(text_left + scale(4)) / scale(8);
                 self.render_explorer_line(
                     layers,
                     &truncate_to_width(&row.label, max_cells),
                     y as f32,
                     text_left as f32,
                     text_right.saturating_sub(text_left) as f32,
-                    ROW_HEIGHT as f32,
+                    row_height as f32,
                     foreground,
                     background,
                     false,
+                    EXPLORER_BODY_FONT_LOGICAL_SIZE,
                 )?;
                 if let Some(status) = git_status {
                     self.render_explorer_line(
                         layers,
                         status.label(),
                         y as f32,
-                        width.saturating_sub(24) as f32,
-                        20.,
-                        ROW_HEIGHT as f32,
+                        width.saturating_sub(scale(24)) as f32,
+                        scale(20) as f32,
+                        row_height as f32,
                         git_status_color(status),
                         background,
                         false,
+                        EXPLORER_BODY_FONT_LOGICAL_SIZE,
                     )?;
                 }
             }
@@ -1371,13 +1413,13 @@ impl TermWindow {
                 x: 0,
                 y,
                 width,
-                height: ROW_HEIGHT,
+                height: row_height,
                 item_type: UIItemType::Explorer(ExplorerUiItem::Row(row_index)),
             });
         }
 
         if self.explorer.rows.len() > capacity && capacity > 0 {
-            let thumb_height = (tree_height * capacity / self.explorer.rows.len()).max(20);
+            let thumb_height = (tree_height * capacity / self.explorer.rows.len()).max(scale(20));
             let max_scroll = self.explorer.rows.len().saturating_sub(capacity);
             let thumb_travel = tree_height.saturating_sub(thumb_height);
             let thumb_top = tree_top
@@ -1390,19 +1432,19 @@ impl TermWindow {
                 layers,
                 2,
                 euclid::rect(
-                    width.saturating_sub(5) as f32,
+                    width.saturating_sub(scale(SCROLLBAR_SIZE)) as f32,
                     thumb_top as f32,
-                    3.,
+                    scale(SCROLLBAR_SIZE) as f32,
                     thumb_height as f32,
                 ),
-                MUTED.to_linear_tuple_rgba(),
+                SCROLLBAR.to_linear_tuple_rgba(),
             )?;
         }
 
         self.ui_items.push(UIItem {
-            x: width.saturating_sub(DIVIDER_HIT_WIDTH / 2),
+            x: width.saturating_sub(divider_hit_width / 2),
             y: top,
-            width: DIVIDER_HIT_WIDTH,
+            width: divider_hit_width,
             height: bottom - top,
             item_type: UIItemType::Explorer(ExplorerUiItem::Divider),
         });
@@ -1410,7 +1452,8 @@ impl TermWindow {
     }
 
     pub fn drag_explorer_divider(&mut self, event: &MouseEvent, context: &dyn WindowOps) {
-        let width = (event.coords.x.max(0) as usize).clamp(MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH);
+        let width = physical_to_logical(event.coords.x.max(0) as usize, self.dimensions.dpi)
+            .clamp(MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH);
         if width != self.explorer.state.width_px {
             self.explorer.state.width_px = width;
             self.explorer.persist();
@@ -1433,10 +1476,12 @@ impl TermWindow {
             ExplorerUiItem::Divider => {
                 context.set_cursor(Some(MouseCursor::SizeLeftRight));
                 if event.kind == MouseEventKind::Press(MousePress::Left) {
+                    let divider_hit_width =
+                        logical_to_physical(DIVIDER_HIT_WIDTH, self.dimensions.dpi);
                     let ui_item = UIItem {
-                        x: self.explorer.state.width_px,
+                        x: logical_to_physical(self.explorer.state.width_px, self.dimensions.dpi),
                         y: 0,
-                        width: DIVIDER_HIT_WIDTH,
+                        width: divider_hit_width,
                         height: self.dimensions.pixel_height,
                         item_type: UIItemType::Explorer(ExplorerUiItem::Divider),
                     };
@@ -1447,7 +1492,7 @@ impl TermWindow {
                 context.set_cursor(Some(MouseCursor::Hand));
                 if event.kind == MouseEventKind::Press(MousePress::Left) {
                     match action {
-                        ExplorerHeaderAction::CycleFollowMode => self.cycle_explorer_follow_mode(),
+                        ExplorerHeaderAction::RevealActive => self.reveal_active_in_explorer(),
                     }
                 }
             }

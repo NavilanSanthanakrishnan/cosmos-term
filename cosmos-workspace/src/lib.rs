@@ -8,7 +8,7 @@ use std::process::Command;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::SystemTime;
 
-const CURRENT_LAYOUT_VERSION: u8 = 2;
+const CURRENT_LAYOUT_VERSION: u8 = 3;
 pub const DEFAULT_SIDEBAR_WIDTH: usize = 420;
 pub const MIN_SIDEBAR_WIDTH: usize = 240;
 pub const MAX_SIDEBAR_WIDTH: usize = 840;
@@ -117,6 +117,7 @@ impl ExplorerState {
             state.visible = true;
             state.width_px = DEFAULT_SIDEBAR_WIDTH;
             state.show_hidden = true;
+            state.follow_mode = FollowMode::Follow;
         }
         state.width_px = state.width_px.clamp(MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH);
         state.deduplicate_roots();
@@ -969,6 +970,7 @@ mod tests {
         state.visible = false;
         state.width_px = 300;
         state.show_hidden = false;
+        state.follow_mode = FollowMode::Locked;
         state.save(&path).unwrap();
 
         let migrated = ExplorerState::load(&path).unwrap();
@@ -976,6 +978,7 @@ mod tests {
         assert!(migrated.visible);
         assert_eq!(migrated.width_px, DEFAULT_SIDEBAR_WIDTH);
         assert!(migrated.show_hidden);
+        assert_eq!(migrated.follow_mode, FollowMode::Follow);
         let _ = fs::remove_dir_all(path.parent().unwrap());
     }
 

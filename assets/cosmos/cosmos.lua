@@ -17,6 +17,10 @@ local close_lock_command = {
 -- Cosmos is a terminal workbench rather than a compact terminal window. These
 -- defaults leave enough room for the persistent explorer and make both the
 -- terminal and native sidebar labels comfortable to scan.
+-- WebGPU's sRGB surface preserves CSS theme colors exactly on both standard
+-- and wide-gamut macOS displays; the legacy OpenGL path applies the display
+-- profile a second time and visibly lifts VS Code's #252526 sidebar color.
+config.front_end = 'WebGpu'
 config.font_size = 14.0
 config.line_height = 1.08
 config.initial_cols = 100
