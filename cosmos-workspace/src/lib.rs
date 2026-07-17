@@ -8,9 +8,9 @@ use std::process::Command;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::SystemTime;
 
-const LEGACY_DEFAULT_SIDEBAR_WIDTH: usize = 300;
+const CURRENT_LAYOUT_VERSION: u8 = 2;
 pub const DEFAULT_SIDEBAR_WIDTH: usize = 420;
-pub const MIN_SIDEBAR_WIDTH: usize = 320;
+pub const MIN_SIDEBAR_WIDTH: usize = 240;
 pub const MAX_SIDEBAR_WIDTH: usize = 840;
 pub const MAX_DIRECTORY_ENTRIES: usize = 5_000;
 
@@ -73,6 +73,8 @@ impl WorkspaceRoot {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExplorerState {
+    #[serde(default)]
+    pub layout_version: u8,
     #[serde(default = "default_true")]
     pub visible: bool,
     #[serde(default = "default_width")]
@@ -90,12 +92,13 @@ pub struct ExplorerState {
 impl Default for ExplorerState {
     fn default() -> Self {
         Self {
+            layout_version: CURRENT_LAYOUT_VERSION,
             visible: true,
             width_px: DEFAULT_SIDEBAR_WIDTH,
             roots: vec![],
             expanded: BTreeSet::new(),
             follow_mode: FollowMode::Follow,
-            show_hidden: false,
+            show_hidden: true,
         }
     }
 }
@@ -109,8 +112,11 @@ impl ExplorerState {
         };
         let mut state: Self = serde_json::from_slice(&data)
             .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
-        if state.width_px == LEGACY_DEFAULT_SIDEBAR_WIDTH {
+        if state.layout_version < CURRENT_LAYOUT_VERSION {
+            state.layout_version = CURRENT_LAYOUT_VERSION;
+            state.visible = true;
             state.width_px = DEFAULT_SIDEBAR_WIDTH;
+            state.show_hidden = true;
         }
         state.width_px = state.width_px.clamp(MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH);
         state.deduplicate_roots();
@@ -304,6 +310,9 @@ impl DirectoryListing {
                         }
                     };
                     let name = item.file_name().to_string_lossy().to_string();
+                    if matches!(name.as_str(), ".git" | ".DS_Store") {
+                        continue;
+                    }
                     if !show_hidden && name.starts_with('.') {
                         continue;
                     }
@@ -628,10 +637,124 @@ pub fn tmux_current_path(tty_name: &str, tmux_executable: &str) -> Result<PathBu
     Ok(PathBuf::from(path))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GitFileStatus {
+    Modified,
+    Added,
+    Deleted,
+    Renamed,
+    Untracked,
+    Conflict,
+}
+
+impl GitFileStatus {
+    fn from_porcelain(code: &[u8]) -> Option<Self> {
+        if code == b"??" {
+            return Some(Self::Untracked);
+        }
+        if code.len() != 2 || code == b"!!" {
+            return None;
+        }
+        if code.contains(&b'U')
+            || matches!(code, b"AA" | b"DD")
+            || (code.contains(&b'A') && code.contains(&b'D'))
+        {
+            Some(Self::Conflict)
+        } else if code.contains(&b'D') {
+            Some(Self::Deleted)
+        } else if code.contains(&b'R') || code.contains(&b'C') {
+            Some(Self::Renamed)
+        } else if code.contains(&b'A') {
+            Some(Self::Added)
+        } else if code.contains(&b'M') || code.contains(&b'T') {
+            Some(Self::Modified)
+        } else {
+            None
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Modified => "M",
+            Self::Added => "A",
+            Self::Deleted => "D",
+            Self::Renamed => "R",
+            Self::Untracked => "U",
+            Self::Conflict => "!",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitStatusSnapshot {
+    pub requested_root: PathBuf,
+    pub repository_root: Option<PathBuf>,
+    pub statuses: HashMap<PathBuf, GitFileStatus>,
+}
+
+impl GitStatusSnapshot {
+    pub fn read(requested_root: &Path) -> Self {
+        let requested_root = normalize_existing_path(requested_root.to_path_buf());
+        let repository_root = find_project_root(&requested_root);
+        let mut snapshot = Self {
+            requested_root,
+            repository_root: repository_root.clone(),
+            statuses: HashMap::new(),
+        };
+        let repository_root = match repository_root {
+            Some(root) => root,
+            None => return snapshot,
+        };
+        let output = match Command::new("git")
+            .current_dir(&repository_root)
+            .args(["status", "--porcelain=v1", "-z", "--untracked-files=all"])
+            .output()
+        {
+            Ok(output) if output.status.success() => output,
+            _ => return snapshot,
+        };
+        snapshot.statuses = parse_git_status(&repository_root, &output.stdout);
+        snapshot
+    }
+}
+
+fn parse_git_status(repository_root: &Path, porcelain: &[u8]) -> HashMap<PathBuf, GitFileStatus> {
+    let records = porcelain
+        .split(|byte| *byte == 0)
+        .filter(|record| !record.is_empty())
+        .collect::<Vec<_>>();
+    let mut statuses = HashMap::new();
+    let mut index = 0;
+    while index < records.len() {
+        let record = records[index];
+        if record.len() < 4 || record[2] != b' ' {
+            index += 1;
+            continue;
+        }
+        let status = GitFileStatus::from_porcelain(&record[..2]);
+        let renamed = record[..2].contains(&b'R') || record[..2].contains(&b'C');
+        let path = &record[3..];
+        if let Some(status) = status {
+            statuses.insert(
+                repository_root.join(String::from_utf8_lossy(path).as_ref()),
+                status,
+            );
+        }
+        if renamed && index + 1 < records.len() {
+            // Porcelain v1's -z form reports a rename as destination followed
+            // by source; the destination is the path decorated in the tree.
+            index += 1;
+        }
+        index += 1;
+    }
+    statuses
+}
+
 #[derive(Debug, Clone)]
 pub enum ServiceResponse {
     DirectoryListed(DirectoryListing),
     ContextResolved(PaneContext),
+    GitStatusLoaded(GitStatusSnapshot),
     DirectoryChanged(Vec<PathBuf>),
     WatcherError(String),
 }
@@ -639,6 +762,7 @@ pub enum ServiceResponse {
 pub struct WorkspaceService {
     directory_tx: Sender<(PathBuf, bool)>,
     context_tx: Sender<PaneContextRequest>,
+    git_status_tx: Sender<PathBuf>,
     watch_tx: Sender<HashSet<PathBuf>>,
     response_rx: Receiver<ServiceResponse>,
 }
@@ -647,6 +771,7 @@ impl WorkspaceService {
     pub fn new() -> Self {
         let (directory_tx, directory_rx) = mpsc::channel::<(PathBuf, bool)>();
         let (context_tx, context_rx) = mpsc::channel::<PaneContextRequest>();
+        let (git_status_tx, git_status_rx) = mpsc::channel::<PathBuf>();
         let (watch_tx, watch_rx) = mpsc::channel::<HashSet<PathBuf>>();
         let (response_tx, response_rx) = mpsc::channel();
         let directory_response_tx = response_tx.clone();
@@ -681,6 +806,23 @@ impl WorkspaceService {
                 }
             })
             .expect("spawn cosmos pane context resolver");
+
+        let git_response_tx = response_tx.clone();
+        std::thread::Builder::new()
+            .name("cosmos-git-status".to_string())
+            .spawn(move || {
+                while let Ok(root) = git_status_rx.recv() {
+                    if git_response_tx
+                        .send(ServiceResponse::GitStatusLoaded(GitStatusSnapshot::read(
+                            &root,
+                        )))
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            })
+            .expect("spawn cosmos git status reader");
 
         std::thread::Builder::new()
             .name("cosmos-filesystem-watcher".to_string())
@@ -724,6 +866,7 @@ impl WorkspaceService {
         Self {
             directory_tx,
             context_tx,
+            git_status_tx,
             watch_tx,
             response_rx,
         }
@@ -735,6 +878,10 @@ impl WorkspaceService {
 
     pub fn resolve_context(&self, request: PaneContextRequest) {
         let _ = self.context_tx.send(request);
+    }
+
+    pub fn git_status(&self, root: PathBuf) {
+        let _ = self.git_status_tx.send(root);
     }
 
     pub fn watch_directories(&self, paths: HashSet<PathBuf>) {
@@ -815,23 +962,51 @@ mod tests {
     }
 
     #[test]
-    fn legacy_default_sidebar_width_migrates_to_roomier_layout() {
-        let path = temporary_path("legacy-width").join("state.json");
+    fn legacy_state_migrates_to_vscode_layout_defaults() {
+        let path = temporary_path("legacy-layout").join("state.json");
         let mut state = ExplorerState::default();
-        state.width_px = LEGACY_DEFAULT_SIDEBAR_WIDTH;
+        state.layout_version = 0;
+        state.visible = false;
+        state.width_px = 300;
+        state.show_hidden = false;
         state.save(&path).unwrap();
 
-        assert_eq!(
-            ExplorerState::load(&path).unwrap().width_px,
-            DEFAULT_SIDEBAR_WIDTH
-        );
+        let migrated = ExplorerState::load(&path).unwrap();
+        assert_eq!(migrated.layout_version, CURRENT_LAYOUT_VERSION);
+        assert!(migrated.visible);
+        assert_eq!(migrated.width_px, DEFAULT_SIDEBAR_WIDTH);
+        assert!(migrated.show_hidden);
         let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn parses_git_porcelain_decorations() {
+        let root = Path::new("/projects/cosmos");
+        let statuses = parse_git_status(
+            root,
+            b" M src/serviceWorker.js\0?? src/new file.js\0R  src/current.js\0src/old.js\0",
+        );
+
+        assert_eq!(
+            statuses.get(&root.join("src/serviceWorker.js")),
+            Some(&GitFileStatus::Modified)
+        );
+        assert_eq!(
+            statuses.get(&root.join("src/new file.js")),
+            Some(&GitFileStatus::Untracked)
+        );
+        assert_eq!(
+            statuses.get(&root.join("src/current.js")),
+            Some(&GitFileStatus::Renamed)
+        );
+        assert!(!statuses.contains_key(&root.join("src/old.js")));
     }
 
     #[test]
     fn directory_listing_is_lazy_and_sorted() {
         let root = temporary_path("listing");
         fs::create_dir_all(root.join("z-dir")).unwrap();
+        fs::create_dir_all(root.join(".git")).unwrap();
         fs::write(root.join("a-file"), b"hello").unwrap();
         fs::write(root.join(".hidden"), b"secret").unwrap();
         let listing = DirectoryListing::read(&root, false);
@@ -839,6 +1014,15 @@ mod tests {
         assert!(listing.entries[0].is_dir);
         assert_eq!(listing.entries[0].name, "z-dir");
         assert_eq!(listing.entries[1].name, "a-file");
+        let visible_hidden = DirectoryListing::read(&root, true);
+        assert!(visible_hidden
+            .entries
+            .iter()
+            .any(|entry| entry.name == ".hidden"));
+        assert!(!visible_hidden
+            .entries
+            .iter()
+            .any(|entry| entry.name == ".git"));
         let _ = fs::remove_dir_all(root);
     }
 

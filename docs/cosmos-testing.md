@@ -11,8 +11,8 @@ git diff --check
 ```
 
 The workspace tests cover follow expansion, Locked behavior, root matching and
-deduplication, folder-scoped row isolation, sidebar-width migration, directory
-sorting/filtering, persistence, and process detection.
+deduplication, folder-scoped row isolation, layout migration, Git porcelain
+parsing, directory sorting/filtering, persistence, and process detection.
 
 ## Release bundle
 
@@ -75,12 +75,14 @@ Use only panes created in Cosmos Term.
 7. Open a selected directory in a tab and a split.
 8. Use an invalid or inaccessible root and confirm an inline error without a
    crash or blocked terminal.
-9. Focus the Activity Bar and press `L` twice. Confirm the labeled mode changes
-   Follow → Locked → Follow.
+9. Focus an Explorer row and press `L` twice. Confirm the ellipsis accent and
+   persisted mode change Follow → Locked → Follow without hiding the sidebar.
 10. Click the terminal, type a command containing `.` and press Return. Confirm
     the command reaches the shell and no explorer action runs.
 11. Press `Command+Shift+E` and confirm the sidebar remains visible and no `E`
     reaches the shell.
+12. In a Git worktree, modify a visible file and confirm a right-aligned `M`
+    appears and refreshes without blocking terminal input.
 
 ## Isolated tmux matrix
 

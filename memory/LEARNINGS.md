@@ -26,7 +26,14 @@
   layer hides otherwise correctly shaped glyphs.
 - `render_screen_line` retains terminal-cell placement even when supplied a
   proportional font. Native sidebar labels need box-model shaping and direct
-  glyph quad emission; Helvetica Neue is available through macOS CoreText.
+  glyph quad emission. Snap screen-space glyph origins to whole pixels before
+  applying the centered render offset; this materially improves small
+  Helvetica Neue labels. The private `.SF NS` family is present on disk but is
+  not resolvable by this baseline's CoreText locator.
+- The bundled `Symbols Nerd Font Mono` contains Seti UI file glyphs with stable
+  codepoints, so the Explorer can match Code OSS file-type shapes without
+  importing a second icon font. Keep Git status invocation on its own worker
+  and parse NUL-delimited porcelain output so spaces and renames remain safe.
 - Keep the active explorer display root transient and separate from persisted
   multi-root state. Follow can then scope directly to the pane CWD without
   adding every visited folder or exposing saved parents/siblings; Project
