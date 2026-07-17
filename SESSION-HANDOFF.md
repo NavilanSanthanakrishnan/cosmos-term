@@ -21,7 +21,7 @@ explorer and using independent application/runtime identities.
 - The Explorer styling is sourced from Code OSS and the supplied reference:
   `#252526` background, `#2B2B2B` section border, `#37373D` inactive
   selection, 35 px title, 22 px rows, 20 px title inset, 8 px tree indentation,
-  11 px title text, 13 px body text in the macOS system UI face, native
+  13 px title text, 15 px body text in the macOS system UI face, native
   chevrons, and a 10 px dark scrollbar.
 - The exact Code OSS `seti.woff` was converted and bundled as
   `VSSeti-Regular.ttf`, with its MIT license retained. File glyph codepoints and
@@ -38,6 +38,9 @@ explorer and using independent application/runtime identities.
 - Layout version 4 migrates previously persisted narrow widths (355 px in the
   live upgrade) to 520 px and saves the migration immediately. The divider
   remains resizable from 240 through 840 logical pixels.
+- Explorer typography is scaled independently from width: the header is 13 pt
+  and tree labels are 15 pt. The live user-resized 263 px width was preserved
+  while applying the larger text.
 - Explorer paint and repeated pane-context checks no longer queue redundant
   directory scans. Cached expanded folders load once, watcher/periodic events
   perform explicit refreshes, pane metadata uses the non-blocking stale-cache
@@ -81,15 +84,15 @@ explorer and using independent application/runtime identities.
   sibling roots and parent-directory siblings; Git porcelain parsing and
   layout migration are covered as well.
 - The final installed `cosmos-term-gui` SHA-256 is
-  `0b40ecea9cb9375e2ff8ac3c629d0000eac96b9885fb89c51180edc2471b7fdd`;
+  `afcd7661981311cb37cbc621fd47f172bf5335c5f081d380a119507470e67833`;
   it exactly matches the packaged release binary.
   Final native captures are
-  `/tmp/cosmos-visual/cosmos-responsive-wide-final-1x.png`
-  (`371227a547a539ce8c3940ab25d0f2a8b217475bf5570bfe5b4d6fd4ec2a4d42`,
-  1337 × 717 at 72 DPI) and
-  `/tmp/cosmos-visual/cosmos-responsive-wide-final-retina.png`
-  (`e9f4f67b1618b2afab2b237db824fdf694cfd61760689240445a67418f0a4631`,
-  2776 × 1434 at 144 DPI).
+  `/tmp/cosmos-visual/cosmos-explorer-larger-text-final-1x.png`
+  (`46a640f3c6b79d40bf79bf64340ac65d09aefd8e21d1e864f011dca10f0f7368`,
+  1080 × 717 at 72 DPI) and
+  `/tmp/cosmos-visual/cosmos-explorer-larger-text-final-retina.png`
+  (`777cd2a9d7e3470e0830608b8c886702ce58b55fbae0510cd6d1c9cd15b6ccfa`,
+  2262 × 1434 at 144 DPI).
 
 ## Verification commands
 

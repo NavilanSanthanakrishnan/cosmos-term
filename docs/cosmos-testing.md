@@ -95,7 +95,7 @@ Use only panes created in Cosmos Term.
     confirmation dialog.
 13. Capture native window screenshots on 72 DPI and 144 DPI displays. Confirm
     the Explorer remains 520 logical pixels wide with a 35 px title, 22 px
-    rows, 11/13 px text, and exact `#252526` background and `#37373D` inactive
+    rows, 13/15 px text, and exact `#252526` background and `#37373D` inactive
     selection pixels on the 72 DPI reference display.
 14. While the terminal repaints under rapid input, confirm cached expanded
     directories are not re-read. Expand an uncached folder and confirm its
