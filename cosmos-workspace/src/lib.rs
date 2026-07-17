@@ -1,18 +1,21 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::ffi::OsStr;
-use std::fs;
-use std::io;
+use std::fs::{self, File};
+use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::time::SystemTime;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const CURRENT_LAYOUT_VERSION: u8 = 4;
 pub const DEFAULT_SIDEBAR_WIDTH: usize = 520;
 pub const MIN_SIDEBAR_WIDTH: usize = 240;
 pub const MAX_SIDEBAR_WIDTH: usize = 840;
 pub const MAX_DIRECTORY_ENTRIES: usize = 5_000;
+const CODEX_ROLLOUT_INITIAL_TAIL_BYTES: u64 = 512 * 1024;
+const CODEX_ROLLOUT_MAX_TAIL_BYTES: u64 = 8 * 1024 * 1024;
+const CODEX_ROLLOUT_DISCOVERY_INTERVAL: Duration = Duration::from_secs(15);
 
 fn default_true() -> bool {
     true
@@ -755,18 +758,301 @@ fn parse_git_status(repository_root: &Path, porcelain: &[u8]) -> HashMap<PathBuf
     statuses
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodexRateLimit {
+    pub used_percent: u8,
+    pub window_minutes: u64,
+    pub resets_at: Option<u64>,
+}
+
+impl CodexRateLimit {
+    pub fn window_label(&self) -> String {
+        match self.window_minutes {
+            300 => "5h".to_string(),
+            1_440 => "day".to_string(),
+            10_080 => "week".to_string(),
+            43_200 | 44_640 => "month".to_string(),
+            minutes if minutes % 10_080 == 0 => format!("{}w", minutes / 10_080),
+            minutes if minutes % 1_440 == 0 => format!("{}d", minutes / 1_440),
+            minutes if minutes % 60 == 0 => format!("{}h", minutes / 60),
+            minutes => format!("{minutes}m"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CodexStatusSnapshot {
+    pub active_loops: usize,
+    pub primary: Option<CodexRateLimit>,
+    pub secondary: Option<CodexRateLimit>,
+    pub total_tokens: Option<u64>,
+    pub source_updated_at: Option<u64>,
+}
+
+impl CodexStatusSnapshot {
+    pub fn read(codex_home: &Path) -> Self {
+        CodexStatusReader::default().read(codex_home)
+    }
+
+    pub fn usage_label(&self) -> String {
+        let format_limit = |limit: &CodexRateLimit| {
+            format!("{} {}% used", limit.window_label(), limit.used_percent)
+        };
+        match (&self.primary, &self.secondary) {
+            (Some(primary), Some(secondary)) => {
+                format!(
+                    "Codex {} · {}",
+                    format_limit(primary),
+                    format_limit(secondary)
+                )
+            }
+            (Some(primary), None) => format!("Codex {}", format_limit(primary)),
+            (None, Some(secondary)) => format!("Codex {}", format_limit(secondary)),
+            (None, None) => "Codex usage unavailable".to_string(),
+        }
+    }
+
+    pub fn reset_label(&self, now: SystemTime) -> Option<String> {
+        let reset = [
+            self.primary.as_ref().and_then(|limit| limit.resets_at),
+            self.secondary.as_ref().and_then(|limit| limit.resets_at),
+        ]
+        .into_iter()
+        .flatten()
+        .min()?;
+        let now = now.duration_since(UNIX_EPOCH).ok()?.as_secs();
+        let remaining = reset.saturating_sub(now);
+        let label = if remaining == 0 {
+            "reset due".to_string()
+        } else if remaining < 60 * 60 {
+            format!("resets in {}m", (remaining / 60).max(1))
+        } else if remaining < 24 * 60 * 60 {
+            format!("resets in {}h", (remaining / (60 * 60)).max(1))
+        } else {
+            format!("resets in {}d", (remaining / (24 * 60 * 60)).max(1))
+        };
+        Some(label)
+    }
+}
+
+#[derive(Default)]
+struct CodexStatusReader {
+    observed_head: Option<(SystemTime, PathBuf)>,
+    last_discovery: Option<Instant>,
+    snapshot: CodexStatusSnapshot,
+}
+
+impl CodexStatusReader {
+    fn read(&mut self, codex_home: &Path) -> CodexStatusSnapshot {
+        self.snapshot.active_loops = codex_loop_count();
+        let now = Instant::now();
+        let mut discover = self
+            .last_discovery
+            .map(|last| now.duration_since(last) >= CODEX_ROLLOUT_DISCOVERY_INTERVAL)
+            .unwrap_or(true);
+        let mut rollouts = Vec::new();
+
+        if !discover {
+            if let Some((observed_modified, path)) = &self.observed_head {
+                match fs::metadata(path).and_then(|metadata| metadata.modified()) {
+                    Ok(modified) if modified != *observed_modified => {
+                        rollouts.push((modified, path.clone()));
+                    }
+                    Ok(_) => return self.snapshot.clone(),
+                    Err(_) => discover = true,
+                }
+            } else {
+                return self.snapshot.clone();
+            }
+        }
+
+        if discover {
+            rollouts = newest_rollout_paths(&codex_home.join("sessions"));
+            self.last_discovery = Some(now);
+        }
+
+        let head = rollouts.first().cloned();
+        if head == self.observed_head {
+            return self.snapshot.clone();
+        }
+        self.observed_head = head;
+        for (modified, path) in rollouts.into_iter().take(16) {
+            if let Some((primary, secondary, total_tokens)) = read_latest_codex_token_count(&path) {
+                self.snapshot.primary = primary;
+                self.snapshot.secondary = secondary;
+                self.snapshot.total_tokens = total_tokens;
+                self.snapshot.source_updated_at = modified
+                    .duration_since(UNIX_EPOCH)
+                    .ok()
+                    .map(|duration| duration.as_secs());
+                break;
+            }
+        }
+        self.snapshot.clone()
+    }
+}
+
+fn newest_rollout_paths(root: &Path) -> Vec<(SystemTime, PathBuf)> {
+    let mut stack = vec![root.to_path_buf()];
+    let mut rollouts = Vec::new();
+    while let Some(directory) = stack.pop() {
+        let entries = match fs::read_dir(directory) {
+            Ok(entries) => entries,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            let file_type = match entry.file_type() {
+                Ok(file_type) => file_type,
+                Err(_) => continue,
+            };
+            if file_type.is_dir() {
+                stack.push(entry.path());
+                continue;
+            }
+            let path = entry.path();
+            if path.extension() != Some(OsStr::new("jsonl")) {
+                continue;
+            }
+            let modified = entry
+                .metadata()
+                .and_then(|metadata| metadata.modified())
+                .unwrap_or(UNIX_EPOCH);
+            rollouts.push((modified, path));
+        }
+    }
+    rollouts.sort_by(|left, right| right.0.cmp(&left.0));
+    rollouts
+}
+
+fn read_latest_codex_token_count(
+    path: &Path,
+) -> Option<(Option<CodexRateLimit>, Option<CodexRateLimit>, Option<u64>)> {
+    let mut file = File::open(path).ok()?;
+    let length = file.metadata().ok()?.len();
+    let mut tail_bytes = CODEX_ROLLOUT_INITIAL_TAIL_BYTES;
+    loop {
+        let start = length.saturating_sub(tail_bytes);
+        file.seek(SeekFrom::Start(start)).ok()?;
+        let mut tail = Vec::with_capacity((length - start) as usize);
+        file.read_to_end(&mut tail).ok()?;
+        let text = String::from_utf8_lossy(&tail);
+        if let Some(status) = text.lines().rev().find_map(parse_codex_token_count_line) {
+            return Some(status);
+        }
+        if start == 0 || tail_bytes >= CODEX_ROLLOUT_MAX_TAIL_BYTES {
+            return None;
+        }
+        tail_bytes = (tail_bytes * 2).min(CODEX_ROLLOUT_MAX_TAIL_BYTES);
+    }
+}
+
+fn parse_codex_token_count_line(
+    line: &str,
+) -> Option<(Option<CodexRateLimit>, Option<CodexRateLimit>, Option<u64>)> {
+    if !line.contains("\"type\":\"token_count\"") {
+        return None;
+    }
+    let value: serde_json::Value = serde_json::from_str(line).ok()?;
+    let payload = value.get("payload")?;
+    if payload.get("type")?.as_str()? != "token_count" {
+        return None;
+    }
+    let rate_limits = payload.get("rate_limits");
+    let parse_limit = |name: &str| {
+        let limit = rate_limits?.get(name)?;
+        if limit.is_null() {
+            return None;
+        }
+        let used_percent = limit.get("used_percent")?.as_f64()?.round().clamp(0., 100.) as u8;
+        Some(CodexRateLimit {
+            used_percent,
+            window_minutes: limit.get("window_minutes")?.as_u64()?,
+            resets_at: limit.get("resets_at").and_then(|value| value.as_u64()),
+        })
+    };
+    let total_tokens = payload
+        .pointer("/info/total_token_usage/total_tokens")
+        .and_then(|value| value.as_u64());
+    Some((
+        parse_limit("primary"),
+        parse_limit("secondary"),
+        total_tokens,
+    ))
+}
+
+fn is_codex_loop_executable(path: &Path) -> bool {
+    path.file_name() == Some(OsStr::new("codex"))
+}
+
+#[cfg(target_os = "macos")]
+fn codex_loop_count() -> usize {
+    let count = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
+    if count <= 0 {
+        return 0;
+    }
+    let mut pids = vec![0 as libc::pid_t; count as usize + 32];
+    let count = unsafe {
+        libc::proc_listallpids(
+            pids.as_mut_ptr() as *mut _,
+            std::mem::size_of_val(pids.as_slice()) as _,
+        )
+    };
+    if count <= 0 {
+        return 0;
+    }
+    pids.truncate((count as usize).min(pids.len()));
+    pids.into_iter()
+        .filter(|pid| {
+            let mut buffer = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+            let length = unsafe {
+                libc::proc_pidpath(*pid, buffer.as_mut_ptr() as *mut _, buffer.len() as u32)
+            };
+            if length <= 0 {
+                return false;
+            }
+            buffer.truncate(length as usize);
+            is_codex_loop_executable(Path::new(OsStr::from_bytes(&buffer)))
+        })
+        .count()
+}
+
+#[cfg(target_os = "macos")]
+use std::os::unix::ffi::OsStrExt;
+
+#[cfg(target_os = "linux")]
+fn codex_loop_count() -> usize {
+    fs::read_dir("/proc")
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|entry| fs::read_link(entry.path().join("exe")).ok())
+        .filter(|path| is_codex_loop_executable(path))
+        .count()
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn codex_loop_count() -> usize {
+    0
+}
+
 #[derive(Debug, Clone)]
 pub enum ServiceResponse {
     DirectoryListed(DirectoryListing),
     ContextResolved(PaneContext),
     GitStatusLoaded(GitStatusSnapshot),
+    CodexStatusLoaded(CodexStatusSnapshot),
     DirectoryChanged(Vec<PathBuf>),
     WatcherError(String),
 }
 
+enum ContextRequest {
+    Pane(PaneContextRequest),
+    CodexStatus(PathBuf),
+}
+
 pub struct WorkspaceService {
     directory_tx: Sender<(PathBuf, bool)>,
-    context_tx: Sender<PaneContextRequest>,
+    context_tx: Sender<ContextRequest>,
     git_status_tx: Sender<PathBuf>,
     watch_tx: Sender<HashSet<PathBuf>>,
     response_rx: Receiver<ServiceResponse>,
@@ -775,7 +1061,7 @@ pub struct WorkspaceService {
 impl WorkspaceService {
     pub fn new() -> Self {
         let (directory_tx, directory_rx) = mpsc::channel::<(PathBuf, bool)>();
-        let (context_tx, context_rx) = mpsc::channel::<PaneContextRequest>();
+        let (context_tx, context_rx) = mpsc::channel::<ContextRequest>();
         let (git_status_tx, git_status_rx) = mpsc::channel::<PathBuf>();
         let (watch_tx, watch_rx) = mpsc::channel::<HashSet<PathBuf>>();
         let (response_tx, response_rx) = mpsc::channel();
@@ -799,13 +1085,19 @@ impl WorkspaceService {
         std::thread::Builder::new()
             .name("cosmos-pane-context".to_string())
             .spawn(move || {
+                let mut codex_status_reader = CodexStatusReader::default();
                 while let Ok(request) = context_rx.recv() {
-                    if context_response_tx
-                        .send(ServiceResponse::ContextResolved(PaneContext::resolve(
-                            request,
-                        )))
-                        .is_err()
-                    {
+                    let response = match request {
+                        ContextRequest::Pane(request) => {
+                            ServiceResponse::ContextResolved(PaneContext::resolve(request))
+                        }
+                        ContextRequest::CodexStatus(codex_home) => {
+                            ServiceResponse::CodexStatusLoaded(
+                                codex_status_reader.read(&codex_home),
+                            )
+                        }
+                    };
+                    if context_response_tx.send(response).is_err() {
                         break;
                     }
                 }
@@ -882,7 +1174,13 @@ impl WorkspaceService {
     }
 
     pub fn resolve_context(&self, request: PaneContextRequest) {
-        let _ = self.context_tx.send(request);
+        let _ = self.context_tx.send(ContextRequest::Pane(request));
+    }
+
+    pub fn codex_status(&self, codex_home: PathBuf) {
+        let _ = self
+            .context_tx
+            .send(ContextRequest::CodexStatus(codex_home));
     }
 
     pub fn git_status(&self, root: PathBuf) {
@@ -1103,5 +1401,83 @@ mod tests {
         assert!(process_is_tmux(Some("tmux")));
         assert!(!process_is_tmux(Some("/bin/zsh")));
         assert!(!process_is_tmux(None));
+    }
+
+    #[test]
+    fn parses_codex_usage_without_reading_transcript_content() {
+        let line = r#"{"timestamp":"2026-07-17T06:46:16.167Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"total_tokens":217947530}},"rate_limits":{"primary":{"used_percent":48.4,"window_minutes":10080,"resets_at":1784780148},"secondary":{"used_percent":12.0,"window_minutes":300,"resets_at":1784300000}}}}"#;
+        let (primary, secondary, total_tokens) = parse_codex_token_count_line(line).unwrap();
+        assert_eq!(
+            primary,
+            Some(CodexRateLimit {
+                used_percent: 48,
+                window_minutes: 10_080,
+                resets_at: Some(1_784_780_148),
+            })
+        );
+        assert_eq!(
+            secondary,
+            Some(CodexRateLimit {
+                used_percent: 12,
+                window_minutes: 300,
+                resets_at: Some(1_784_300_000),
+            })
+        );
+        assert_eq!(total_tokens, Some(217_947_530));
+    }
+
+    #[test]
+    fn formats_compact_codex_status_labels() {
+        let status = CodexStatusSnapshot {
+            active_loops: 5,
+            primary: Some(CodexRateLimit {
+                used_percent: 48,
+                window_minutes: 10_080,
+                resets_at: None,
+            }),
+            secondary: None,
+            total_tokens: None,
+            source_updated_at: None,
+        };
+        assert_eq!(status.usage_label(), "Codex week 48% used");
+        assert_eq!(
+            CodexRateLimit {
+                used_percent: 1,
+                window_minutes: 300,
+                resets_at: None,
+            }
+            .window_label(),
+            "5h"
+        );
+    }
+
+    #[test]
+    fn shows_the_next_codex_reset() {
+        let now = UNIX_EPOCH + Duration::from_secs(1_000);
+        let status = CodexStatusSnapshot {
+            primary: Some(CodexRateLimit {
+                used_percent: 48,
+                window_minutes: 10_080,
+                resets_at: Some(1_000 + 3 * 24 * 60 * 60),
+            }),
+            secondary: Some(CodexRateLimit {
+                used_percent: 12,
+                window_minutes: 300,
+                resets_at: Some(1_000 + 2 * 60 * 60),
+            }),
+            ..CodexStatusSnapshot::default()
+        };
+        assert_eq!(status.reset_label(now).as_deref(), Some("resets in 2h"));
+    }
+
+    #[test]
+    fn counts_only_the_codex_root_executable_name() {
+        assert!(is_codex_loop_executable(Path::new(
+            "/Users/example/.local/bin/codex"
+        )));
+        assert!(!is_codex_loop_executable(Path::new(
+            "/Users/example/.local/bin/codex-code-mode-host"
+        )));
+        assert!(!is_codex_loop_executable(Path::new("/usr/bin/node")));
     }
 }

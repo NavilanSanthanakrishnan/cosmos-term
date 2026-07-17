@@ -67,6 +67,11 @@
   confirmation. Wrap `CloseCurrentTab` in the close-lock verifier and
   pre-close autosave callback when destructive tab closure must require the
   same custom passphrase as `Command+Q`.
+- A live Codex footer does not need a daemon or CLI subprocess. Read only
+  structured `token_count` lines from the changed rollout tail, cache broader
+  session discovery, and use native process enumeration with an exact `codex`
+  executable-basename match. This keeps multi-gigabyte session histories and
+  similarly named helper processes from making the UI noisy or inaccurate.
 - Canvas-drawn explorer focus must be released explicitly when a terminal pane
   is clicked. Native window focus alone does not identify which in-window
   region owns keyboard events; without the handoff, `.` and Return can trigger

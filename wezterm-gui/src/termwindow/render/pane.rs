@@ -238,7 +238,10 @@ impl crate::TermWindow {
                 &*pos.pane,
                 current_viewport,
                 self.dimensions.pixel_height.saturating_sub(
-                    thumb_y_offset + border.bottom.get() + bottom_bar_height as usize,
+                    thumb_y_offset
+                        + border.bottom.get()
+                        + bottom_bar_height as usize
+                        + self.status_bar_height(),
                 ),
                 min_height as usize,
             );

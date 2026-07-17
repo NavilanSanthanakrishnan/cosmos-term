@@ -25,12 +25,15 @@ This crate owns UI-independent workspace behavior:
 - row generation for expanded directories
 - pane-context resolution for native panes and tmux
 - non-blocking Git status snapshots and porcelain parsing
+- read-only Codex usage snapshots and native active-process counting
 - filesystem change notification
 
 Four independent worker threads serve directory reads, pane-context requests,
 Git status requests, and filesystem watches. Responses return through a single
 non-blocking channel consumed by the window. The render thread never
-recursively scans a workspace or invokes Git.
+recursively scans a workspace, invokes Git, or reads Codex session data. Codex
+status work shares the existing pane-context worker rather than creating a
+fifth thread or helper process.
 
 Only expanded directories are watched, and watches are non-recursive. A
 periodic refresh provides a fallback if a platform watcher misses an event.
@@ -52,10 +55,14 @@ The native window adapter owns:
 - mouse hit targets, scrolling, divider drag, and row activation
 - keyboard navigation and root prompts
 - spawning selected directories into tabs or splits
+- a native Code OSS Dark Modern status bar that reserves 22 logical pixels
+  below the Explorer and terminal
 
 The explorer width becomes a left origin offset for tab bars, panes, split
-backgrounds, and terminal rendering. Existing WezTerm widgets continue to use
-their normal layout inside the remaining viewport.
+backgrounds, and terminal rendering. The status bar similarly becomes a
+bottom layout inset for terminal rows, scrollbars, and bottom-positioned tab
+bars. Existing WezTerm widgets continue to use their normal layout inside the
+remaining viewport.
 
 ### Narrow upstream integration
 
@@ -109,6 +116,20 @@ the right edge of their rows. `.git` itself remains excluded, matching VS
 Code's default Explorer exclusions while preserving visible dotfiles such as
 `.github`, `.vscode`, and `.gitignore`.
 
+## Codex status
+
+The footer reads only structured `token_count` JSONL events under
+`$CODEX_HOME/sessions` (or `~/.codex/sessions`). It never parses prompt or
+response text. The active rollout's metadata is checked on the two-second UI
+refresh, and at most an 8 MiB tail is read only after that file changes.
+Broader rollout discovery is cached for 15 seconds, which avoids repeatedly
+walking a large session history.
+
+On macOS, active loops are counted with the native process API and require an
+executable basename of exactly `codex`. Processes such as
+`codex-code-mode-host` are excluded. This design does not spawn `ps`, `pgrep`,
+Codex CLI calls, a daemon, or any persistent status helper.
+
 ## Current-folder policy
 
 The Explorer is permanently enabled and always follows the active pane's exact
@@ -135,7 +156,7 @@ The file contains a layout version, sidebar width, expanded directories,
 hidden-file preference, and legacy roots/follow/visibility fields. The legacy
 fields are retained for state compatibility but cannot hide, lock, or widen
 the runtime scope beyond the active pane directory. Cached listings, Git
-status, and pane context are intentionally transient.
+status, Codex status, and pane context are intentionally transient.
 
 ## Isolation
 

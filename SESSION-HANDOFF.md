@@ -81,19 +81,32 @@ explorer and using independent application/runtime identities.
   permanently closing the current tab and all of its panes. Canceling or
   failing verification blocks the close. `Command+Q` retains the equivalent
   protected whole-application autosave/close flow.
+- The exact protected-close state before footer work is retained at annotated
+  tag `backup/command-w-protected-2026-07-16` (commit `7abaf9cae`).
+- A native 22 logical-pixel status bar now reserves real space below both the
+  Explorer and terminal. It follows Code OSS Dark Modern status styling:
+  `#181818` background, `#2B2B2B` top border, `#CCCCCC` 12 pt system UI text,
+  a green live indicator, and compact left/right item alignment.
+- The footer shows structured Codex rate-limit usage, the nearest reset, and
+  the number of exact `codex` executables. A live test moved the loop count
+  from four to five and back to four without an app restart; usage advanced
+  from 48% to 49% while the final build remained open.
+- Codex status runs through the existing pane-context worker and native macOS
+  process enumeration. It creates no daemon, helper, launch agent, shell
+  poller, `ps`, or `pgrep` process. Active-rollout metadata is checked every
+  two seconds, content is read only after it changes, and broader discovery
+  across the 4 GB local session history is cached for 15 seconds.
 - Folder-scoped row generation has unit coverage for excluding both saved
   sibling roots and parent-directory siblings; Git porcelain parsing and
-  layout migration are covered as well.
+  layout migration are covered as well. Structured Codex usage parsing,
+  nearest-reset selection, and executable-name filtering are also covered.
 - The final installed `cosmos-term-gui` SHA-256 is
-  `afcd7661981311cb37cbc621fd47f172bf5335c5f081d380a119507470e67833`;
+  `15fc41f77db41e8c28cd37173d99d51ff7c20f18984b478e92f6c06544711915`;
   it exactly matches the packaged release binary.
-  Final native captures are
-  `/tmp/cosmos-visual/cosmos-explorer-larger-text-final-1x.png`
-  (`46a640f3c6b79d40bf79bf64340ac65d09aefd8e21d1e864f011dca10f0f7368`,
-  1080 × 717 at 72 DPI) and
-  `/tmp/cosmos-visual/cosmos-explorer-larger-text-final-retina.png`
-  (`777cd2a9d7e3470e0830608b8c886702ce58b55fbae0510cd6d1c9cd15b6ccfa`,
-  2262 × 1434 at 144 DPI).
+  The final native status capture is
+  `/tmp/cosmos-visual/cosmos-codex-status-final.png`
+  (`623cec8acf04326d0a2a808628e6637ec59b480d81b6258b9e01ca52180ddaf0`,
+  2486 × 1702 at Retina resolution).
 
 ## Verification commands
 
