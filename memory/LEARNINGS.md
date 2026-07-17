@@ -63,9 +63,10 @@
   work and make input feel laggy. Keep worker-response polling faster than pane
   context polling, and use `CachePolicy::AllowStale` so process discovery never
   stalls the UI thread.
-- Normal tab close should remain independent from whole-application protection:
-  bind `Command+W` directly to `CloseCurrentTab`, and reserve close-lock plus
-  autosave for `Command+Q`.
+- A custom `Command+W` assignment bypasses WezTerm's window-close
+  confirmation. Wrap `CloseCurrentTab` in the close-lock verifier and
+  pre-close autosave callback when destructive tab closure must require the
+  same custom passphrase as `Command+Q`.
 - Canvas-drawn explorer focus must be released explicitly when a terminal pane
   is clicked. Native window focus alone does not identify which in-window
   region owns keyboard events; without the handoff, `.` and Return can trigger
