@@ -33,6 +33,12 @@ selects WebGPU because its sRGB surface preserves VS Code theme values on both
 standard and wide-gamut macOS displays. Validate that configured default at
 both 72 and 144 DPI.
 
+On a mixed-DPI Mac, launch from both the standard and Retina screens. After
+Cocoa completes placement, the window must settle to the configured 100 × 32
+terminal geometry plus the 420 logical-pixel Explorer. Type into the terminal
+and move the window between screens; it must not re-expand, retain stale
+WebGPU quads, or change the Explorer's apparent scale.
+
 ## Config and protocol isolation
 
 Launch or query Cosmos Term with deliberately hostile WezTerm variables:

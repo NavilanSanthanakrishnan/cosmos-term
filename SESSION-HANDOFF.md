@@ -35,6 +35,10 @@ explorer and using independent application/runtime identities.
 - The 420 logical-pixel default remains intentionally roomy, with 14 pt
   terminal text and a 100 × 32 initial terminal. Complete Explorer geometry is
   DPI-scaled, so it retains the same apparent size at 72 and 144 DPI.
+- macOS initial geometry now uses the active screen's effective DPI. After
+  Cocoa finalizes cross-screen placement, Cosmos restores the mux-requested
+  cell geometry against the actual screen and resizes WebGPU before repainting;
+  repeated mixed-DPI launches remain 100 × 32 instead of opening at 2× size.
 - The bundled config uses WebGPU. Native screenshots on the DELL 72 DPI
   display produce exact `#252526` and `#37373D` pixels; the Retina capture
   remains sharp at 2× physical resolution.
@@ -69,16 +73,18 @@ explorer and using independent application/runtime identities.
 - Folder-scoped row generation has unit coverage for excluding both saved
   sibling roots and parent-directory siblings; Git porcelain parsing and
   layout migration are covered as well.
-- The final installed GUI hash is
-  `28b0e6416f9bef6fd1196b25a753d465d6ed397fe725a9c32929b180c0d08105`.
+- The final installed `cosmos-term-gui` SHA-256 is
+  `5d4789a78dc266b06475a10d37f9e64319e5934ab4772b08cb4106755625cfcb`;
+  it exactly matches the packaged release binary.
   Final native captures are
-  `/tmp/cosmos-visual/cosmos-vscode-explorer-system-font-final-1x.png`
-  (`d0cf5e13d941ef2436d0d7b46ec2ff2aed0c09e65c92a9ea8f70d6b81b776fec`)
-  and
-  `/tmp/cosmos-visual/cosmos-vscode-explorer-system-font-final-retina.png`
-  (`75ae338fce0dcf8d2b9aaf7edb89b9c1987388cde29d5508e383979e0f3ec0ed`).
+  `/tmp/cosmos-visual/cosmos-vscode-explorer-final-installed-1x.png`
+  (`385f723a2f6e9d614aeb8c9a3db11e71c4d01d029f47807a42fdc47284bd6c37`,
+  1288 × 717 at 72 DPI) and
+  `/tmp/cosmos-visual/cosmos-vscode-explorer-final-installed-retina.png`
+  (`fb3825d47b814da5c43c01825e4adff2a4bd75db451c2dbef58c717fa1b5b852`,
+  2576 × 1434 at 144 DPI).
   The reference comparison is
-  `/tmp/cosmos-visual/vscode-reference-vs-cosmos-system-font-final.png`.
+  `/tmp/cosmos-visual/vscode-reference-vs-cosmos-final-installed.png`.
 
 ## Verification commands
 
@@ -109,13 +115,17 @@ git diff --check
 
 The fork starts from WezTerm commit
 `5046fc225992db6ba2ef8812743fadfdfe4b184a`, matching the installed WezTerm
-baseline. Three narrow modern-toolchain compatibility changes are intentional:
+baseline. Four narrow modern-toolchain/runtime compatibility changes are
+intentional:
 
 - FreeType bindings avoid constructing Rust slices from null pointers.
 - The obsolete macOS full-screen button constant is omitted.
 - The legacy `glium` package is compiled at optimization level 0 in release
   builds because current LLVM miscompiles that old version's OpenGL texture
   path; the rest of the release remains optimized.
+- Initial macOS window geometry is converted from physical pixels to AppKit
+  points using the active screen DPI, then reconciled once Cocoa has finalized
+  mixed-DPI placement.
 
 ## Remaining release work
 

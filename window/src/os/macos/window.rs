@@ -448,6 +448,17 @@ impl Window {
             x,
             y,
         } = conn.resolve_geometry(geometry);
+
+        // Requested geometry is expressed in physical pixels, while AppKit's
+        // NSWindow initializer consumes logical points. Use the active
+        // screen's effective DPI for the initial conversion so a new window
+        // does not open at 2x size before the first Retina resize event.
+        let scale_factor = ((conn.default_dpi() / crate::DEFAULT_DPI) as usize).max(1);
+        let width = width / scale_factor;
+        let height = height / scale_factor;
+        let x = x.map(|x| x / scale_factor as i32);
+        let y = y.map(|y| y / scale_factor as i32);
+
         let initial_pos = match (x, y) {
             (Some(x), Some(y)) => Some(ScreenPoint::new(x as isize, y as isize)),
             _ => None,
