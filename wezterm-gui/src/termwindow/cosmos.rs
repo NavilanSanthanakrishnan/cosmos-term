@@ -10,8 +10,8 @@ use ::window::{
 use config::keyassignment::{SpawnCommand, SpawnTabDomain};
 use config::{DimensionContext, FontAttributes, FontWeight, TextStyle};
 use cosmos_workspace::{
-    expand_home, DirectoryCache, ExplorerRow, ExplorerRowKind, ExplorerState, FollowMode,
-    GitFileStatus, PaneContext, PaneContextRequest, ServiceResponse, WorkspaceRoot,
+    expand_home, CodexStatusSnapshot, DirectoryCache, ExplorerRow, ExplorerRowKind, ExplorerState,
+    FollowMode, GitFileStatus, PaneContext, PaneContextRequest, ServiceResponse, WorkspaceRoot,
     WorkspaceService, MAX_SIDEBAR_WIDTH, MIN_SIDEBAR_WIDTH,
 };
 use mux::pane::CachePolicy;
@@ -20,7 +20,7 @@ use mux::Mux;
 use ordered_float::NotNan;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 use termwiz::cell::CellAttributes;
 use termwiz::color::RgbColor;
 use termwiz::input::{InputEvent, KeyCode as TermKeyCode, KeyEvent as TermKeyEvent};
@@ -42,9 +42,11 @@ const TREE_INDENT: usize = 8;
 const ICON_SIZE: usize = 16;
 const ACTION_SIZE: usize = 22;
 const SCROLLBAR_SIZE: usize = 10;
+const STATUS_BAR_HEIGHT: usize = 22;
 const EXPLORER_HEADER_FONT_LOGICAL_SIZE: f64 = 13.0;
 const EXPLORER_BODY_FONT_LOGICAL_SIZE: f64 = 15.0;
 const EXPLORER_ICON_FONT_LOGICAL_SIZE: f64 = 16.0;
+const STATUS_BAR_FONT_LOGICAL_SIZE: f64 = 12.0;
 #[cfg(target_os = "macos")]
 const EXPLORER_UI_FONT_FAMILY: &str = "System Font";
 #[cfg(not(target_os = "macos"))]
@@ -53,6 +55,7 @@ const VIRTUAL_ROOT_INDEX: usize = usize::MAX;
 const SERVICE_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const CONTEXT_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const DIRECTORY_REFRESH_INTERVAL: Duration = Duration::from_secs(2);
+const CODEX_STATUS_REFRESH_INTERVAL: Duration = Duration::from_secs(2);
 
 fn logical_to_physical(value: usize, dpi: usize) -> usize {
     if value == 0 {
@@ -76,6 +79,11 @@ const ACTIVE_SELECTION_BG: RgbColor = RgbColor::new_8bpc(4, 57, 94);
 // VS Code's dark scrollbar is #797979 at 40% over the #252526 sidebar.
 const SCROLLBAR: RgbColor = RgbColor::new_8bpc(71, 71, 71);
 const ERROR: RgbColor = RgbColor::new_8bpc(248, 128, 112);
+// VS Code Dark Modern's status bar tokens.
+const STATUS_BAR_BG: RgbColor = RgbColor::new_8bpc(24, 24, 24);
+const STATUS_BAR_BORDER: RgbColor = RgbColor::new_8bpc(43, 43, 43);
+const STATUS_BAR_TEXT: RgbColor = RgbColor::new_8bpc(204, 204, 204);
+const STATUS_BAR_LIVE: RgbColor = RgbColor::new_8bpc(137, 209, 133);
 
 const CHEVRON_RIGHT: &[Poly] = &[Poly {
     path: &[
@@ -197,9 +205,13 @@ pub struct ExplorerUi {
     context_request_in_flight: bool,
     git_statuses: HashMap<PathBuf, GitFileStatus>,
     git_status_request_in_flight: bool,
+    codex_home: PathBuf,
+    codex_status: CodexStatusSnapshot,
+    codex_status_request_in_flight: bool,
     last_context_request: Instant,
     last_directory_refresh: Instant,
     last_git_status_refresh: Instant,
+    last_codex_status_refresh: Instant,
     tick_scheduled: bool,
     last_error: Option<String>,
 }
@@ -232,6 +244,9 @@ impl ExplorerUi {
                 last_error = Some(format!("Unable to save explorer state: {err}"));
             }
         }
+        let codex_home = std::env::var_os("CODEX_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| config::HOME_DIR.join(".codex"));
         Self {
             state,
             state_path,
@@ -251,12 +266,18 @@ impl ExplorerUi {
             context_request_in_flight: false,
             git_statuses: HashMap::new(),
             git_status_request_in_flight: false,
+            codex_home,
+            codex_status: CodexStatusSnapshot::default(),
+            codex_status_request_in_flight: false,
             last_context_request: Instant::now()
                 .checked_sub(CONTEXT_POLL_INTERVAL)
                 .unwrap_or_else(Instant::now),
             last_directory_refresh: Instant::now(),
             last_git_status_refresh: Instant::now()
                 .checked_sub(DIRECTORY_REFRESH_INTERVAL)
+                .unwrap_or_else(Instant::now),
+            last_codex_status_refresh: Instant::now()
+                .checked_sub(CODEX_STATUS_REFRESH_INTERVAL)
                 .unwrap_or_else(Instant::now),
             tick_scheduled: false,
             last_error,
@@ -345,6 +366,14 @@ impl ExplorerUi {
             self.git_status_request_in_flight = true;
             self.service.git_status(root.path.clone());
         }
+    }
+
+    fn request_codex_status(&mut self) {
+        if self.codex_status_request_in_flight {
+            return;
+        }
+        self.codex_status_request_in_flight = true;
+        self.service.codex_status(self.codex_home.clone());
     }
 
     fn refresh_changed_paths(&mut self, paths: Vec<PathBuf>) {
@@ -610,6 +639,10 @@ impl TermWindow {
         self.explorer_width()
     }
 
+    pub fn status_bar_height(&self) -> usize {
+        logical_to_physical(STATUS_BAR_HEIGHT, self.dimensions.dpi)
+    }
+
     pub fn schedule_explorer_tick(&mut self) {
         if self.explorer.tick_scheduled {
             return;
@@ -663,6 +696,13 @@ impl TermWindow {
                         changed = true;
                     }
                 }
+                ServiceResponse::CodexStatusLoaded(snapshot) => {
+                    self.explorer.codex_status_request_in_flight = false;
+                    if self.explorer.codex_status != snapshot {
+                        self.explorer.codex_status = snapshot;
+                        changed = true;
+                    }
+                }
                 ServiceResponse::DirectoryChanged(paths) => {
                     self.explorer.refresh_changed_paths(paths);
                 }
@@ -686,6 +726,12 @@ impl TermWindow {
         if now.duration_since(self.explorer.last_git_status_refresh) >= DIRECTORY_REFRESH_INTERVAL {
             self.explorer.last_git_status_refresh = now;
             self.explorer.request_git_status();
+        }
+        if now.duration_since(self.explorer.last_codex_status_refresh)
+            >= CODEX_STATUS_REFRESH_INTERVAL
+        {
+            self.explorer.last_codex_status_refresh = now;
+            self.explorer.request_codex_status();
         }
         self.schedule_explorer_tick();
         changed
@@ -1176,7 +1222,7 @@ impl TermWindow {
         let bottom = self
             .dimensions
             .pixel_height
-            .saturating_sub(border.bottom.get());
+            .saturating_sub(border.bottom.get() + self.status_bar_height());
         let tree_top = top + title_height;
         let tree_bottom = bottom;
         let tree_height = tree_bottom.saturating_sub(tree_top);
@@ -1464,6 +1510,124 @@ impl TermWindow {
             width: divider_hit_width,
             height: bottom - top,
             item_type: UIItemType::Explorer(ExplorerUiItem::Divider),
+        });
+        Ok(())
+    }
+
+    pub fn paint_status_bar(
+        &mut self,
+        layers: &mut TripleLayerQuadAllocator,
+    ) -> anyhow::Result<()> {
+        let dpi = self.dimensions.dpi;
+        let scale = |value| logical_to_physical(value, dpi);
+        let border = self.get_os_border();
+        let height = self.status_bar_height();
+        let bottom = self
+            .dimensions
+            .pixel_height
+            .saturating_sub(border.bottom.get());
+        let top = bottom.saturating_sub(height);
+        let width = self.dimensions.pixel_width;
+
+        self.filled_rectangle(
+            layers,
+            0,
+            euclid::rect(0., top as f32, width as f32, height as f32),
+            STATUS_BAR_BG.to_linear_tuple_rgba(),
+        )?;
+        self.filled_rectangle(
+            layers,
+            2,
+            euclid::rect(0., top as f32, width as f32, scale(1) as f32),
+            STATUS_BAR_BORDER.to_linear_tuple_rgba(),
+        )?;
+
+        self.render_explorer_line(
+            layers,
+            "●",
+            top as f32,
+            scale(8) as f32,
+            scale(14) as f32,
+            height as f32,
+            if self.explorer.codex_status.active_loops > 0 {
+                STATUS_BAR_LIVE
+            } else {
+                MUTED
+            },
+            STATUS_BAR_BG,
+            false,
+            STATUS_BAR_FONT_LOGICAL_SIZE,
+        )?;
+
+        let usage = truncate_to_width(&self.explorer.codex_status.usage_label(), 42);
+        let usage_left = scale(26);
+        let usage_logical_width = (UnicodeWidthStr::width(usage.as_str()) * 7 + 12).clamp(120, 300);
+        let usage_width = scale(usage_logical_width).min(width.saturating_sub(usage_left));
+        self.render_explorer_line(
+            layers,
+            &usage,
+            top as f32,
+            usage_left as f32,
+            usage_width as f32,
+            height as f32,
+            STATUS_BAR_TEXT,
+            STATUS_BAR_BG,
+            false,
+            STATUS_BAR_FONT_LOGICAL_SIZE,
+        )?;
+
+        let loop_label = match self.explorer.codex_status.active_loops {
+            1 => "1 loop".to_string(),
+            count => format!("{count} loops"),
+        };
+        let loops_left = usage_left + usage_width + scale(4);
+        let loops_logical_width =
+            (UnicodeWidthStr::width(loop_label.as_str()) * 7 + 8).clamp(48, 80);
+        let loops_width = scale(loops_logical_width).min(width.saturating_sub(loops_left));
+        if loops_left < width {
+            self.render_explorer_line(
+                layers,
+                &loop_label,
+                top as f32,
+                loops_left as f32,
+                loops_width as f32,
+                height as f32,
+                STATUS_BAR_TEXT,
+                STATUS_BAR_BG,
+                false,
+                STATUS_BAR_FONT_LOGICAL_SIZE,
+            )?;
+        }
+
+        if let Some(reset) = self.explorer.codex_status.reset_label(SystemTime::now()) {
+            let reset_width = scale(120).min(width);
+            let reset_left = width.saturating_sub(reset_width + scale(8));
+            if reset_left
+                > loops_left
+                    .saturating_add(loops_width)
+                    .saturating_add(scale(8))
+            {
+                self.render_explorer_line(
+                    layers,
+                    &reset,
+                    top as f32,
+                    reset_left as f32,
+                    reset_width as f32,
+                    height as f32,
+                    MUTED,
+                    STATUS_BAR_BG,
+                    false,
+                    STATUS_BAR_FONT_LOGICAL_SIZE,
+                )?;
+            }
+        }
+
+        self.ui_items.push(UIItem {
+            x: 0,
+            y: top,
+            width,
+            height,
+            item_type: UIItemType::StatusBar,
         });
         Ok(())
     }

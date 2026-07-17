@@ -12,7 +12,8 @@ git diff --check
 
 The workspace tests cover legacy follow-state compatibility, root matching and
 deduplication, folder-scoped row isolation, layout migration, Git porcelain
-parsing, directory sorting/filtering, persistence, and process detection.
+parsing, directory sorting/filtering, persistence, structured Codex usage
+parsing, reset selection, and exact executable-name process detection.
 
 ## Release bundle
 
@@ -35,9 +36,10 @@ both 72 and 144 DPI.
 
 On a mixed-DPI Mac, launch from both the standard and Retina screens. After
 Cocoa completes placement, the window must settle to the configured 100 × 32
-terminal geometry plus the 520 logical-pixel Explorer. Type into the terminal
-and move the window between screens; it must not re-expand, retain stale
-WebGPU quads, or change the Explorer's apparent scale.
+terminal geometry plus the 520 logical-pixel Explorer and 22 logical-pixel
+status bar. Type into the terminal and move the window between screens; it
+must not re-expand, retain stale WebGPU quads, or change the Explorer's
+apparent scale.
 
 ## Config and protocol isolation
 
@@ -103,6 +105,14 @@ Use only panes created in Cosmos Term.
     directories are not re-read. Expand an uncached folder and confirm its
     worker result appears on the 50 ms service-response cycle; watcher and
     periodic refreshes must remain the only background rescan paths.
+15. Confirm the bottom bar reports the current Codex usage window, nearest
+    reset, and active loop count. Start one disposable `codex` executable and
+    confirm the count increments within two seconds; stop it and confirm the
+    count decrements without restarting Cosmos.
+16. Inspect Cosmos child processes while the footer updates. Confirm there is
+    no status helper, shell loop, daemon, or repeated `ps`/`pgrep` process.
+    Updating the active rollout should not trigger a full session-tree walk;
+    broad discovery is rate-limited to once per 15 seconds.
 
 ## Isolated tmux matrix
 

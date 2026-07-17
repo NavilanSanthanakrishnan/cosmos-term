@@ -33,6 +33,8 @@ was installed when this fork was created.
 - Non-destructive inline errors for inaccessible or invalid paths
 - Logical-pixel rendering that remains the same apparent size on 1× and Retina
   displays
+- A native 22 px Dark Modern status bar with live Codex usage, next reset, and
+  exact active-loop count
 
 Cosmos Term is the terminal application itself—not a wrapper around WezTerm
 and not an editor embedding a terminal.
@@ -71,6 +73,19 @@ keyboard focus to the terminal.
 then permanently closes the current tab and every process in its panes.
 Canceling or entering the wrong passphrase leaves the tab untouched.
 `Command+Q` applies the same protected autosave flow to the whole application.
+
+## Codex status
+
+The thin bottom bar is always visible. It reads Codex rate-limit snapshots
+from the structured `token_count` events in the local Codex session log and
+counts only running executables named exactly `codex`; helpers are excluded.
+The left side shows usage and active loops, while the right side shows the
+next reset.
+
+Updates run through the existing native workspace worker. There is no helper
+daemon, launch agent, shell polling loop, or persistent background service.
+The active session file is checked every two seconds, its contents are read
+only when the file changes, and broader session-file discovery is cached.
 
 ## Isolation from WezTerm
 

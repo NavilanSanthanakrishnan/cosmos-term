@@ -163,6 +163,7 @@ pub enum UIItemType {
     BelowScrollThumb,
     Split(PositionedSplit),
     Explorer(ExplorerUiItem),
+    StatusBar,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1943,7 +1944,8 @@ impl TermWindow {
         let border = self.get_os_border();
         let tab_bar_height = self.tab_bar_pixel_height().unwrap_or(0.);
         let tab_bar_y = if self.config.tab_bar_at_bottom {
-            ((self.dimensions.pixel_height as f32) - (tab_bar_height + border.bottom.get() as f32))
+            ((self.dimensions.pixel_height as f32)
+                - (tab_bar_height + border.bottom.get() as f32 + self.status_bar_height() as f32))
                 .max(0.)
         } else {
             border.top.get() as f32

@@ -502,7 +502,9 @@ impl crate::TermWindow {
             terminal_origin_x,
             if self.config.tab_bar_at_bottom {
                 self.dimensions.pixel_height as f32
-                    - (computed.bounds.height() + border.bottom.get() as f32)
+                    - (computed.bounds.height()
+                        + border.bottom.get() as f32
+                        + self.status_bar_height() as f32)
             } else {
                 border.top.get() as f32
             },
