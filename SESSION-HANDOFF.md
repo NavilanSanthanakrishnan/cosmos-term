@@ -164,9 +164,10 @@ explorer and using independent application/runtime identities.
   2486 × 1702 at Retina resolution).
 - The public README screenshot is
   `docs/screenshots/cosmos-term-workbench.png`
-  (`5f01f7764ecd13d58bff58652029111840aa5d426ccd1236acf6141dee7b5084`,
-  2912 × 1614). It shows the CPU/RAM footer and was captured from an isolated
-  packaged process; the
+  (`50d745b0b1769e5ec7f2cb4393e1fef954db969c755484b0206176b03678da12`,
+  1148 × 807). It shows the native formatted architecture Markdown workspace,
+  Explorer, terminal-return control, edit control, tabs, and CPU/RAM footer.
+  It was captured from an isolated packaged process; the
   installed Cosmos PID and default tmux clients were unchanged before and
   after the capture.
 - Public prerelease `v0.1.0-alpha.1` targets merge commit
@@ -202,11 +203,14 @@ explorer and using independent application/runtime identities.
 - Before installation, the current protected-close app was copied to
   `~/Applications/Cosmos Term Releases/Cosmos Term-command-w-protected-2026-07-18.app`
   (GUI SHA-256 `f0a610f933616a6c5ab8e656c8e2a76492e01b8a9b965ed7e6cf1a0155f8d2ca`).
-  The signed candidate is staged as
-  `Cosmos Term-file-workspace-2026-07-18.app` in the same directory (GUI
-  SHA-256 `0abf05679ebeafde8265bdbeb65a168277ed20f2f87e83259365dd4a50ad015e`).
-  At this handoff point the installed PID 80878 is deliberately still running
-  the protected-close build; it was not killed or overwritten.
+  The final signed candidate is staged as
+  `Cosmos Term-file-workspace-final-2026-07-18.app` in the same directory (GUI
+  SHA-256 `0ad853d88dd45511ab71cb7676e6434d150db85d96794d088d7b2a990b532f0a`).
+  Common README HTML wrappers and badges are suppressed or converted into
+  native headings, HTML whitespace is normalized, and Markdown tables render
+  as separated monospaced rows. The initially installed candidate PID 95283
+  remains running until the user completes the protected quit for this final
+  replacement.
 
 ## Verification commands
 
