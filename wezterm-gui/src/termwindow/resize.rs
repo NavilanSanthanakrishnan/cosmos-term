@@ -180,7 +180,8 @@ impl super::TermWindow {
             let pixel_height = (rows * self.render_metrics.cell_size.height as usize)
                 + (padding_top + padding_bottom)
                 + (border.top + border.bottom).get() as usize
-                + tab_bar_height as usize;
+                + tab_bar_height as usize
+                + self.status_bar_height();
 
             let pixel_width = (cols * self.render_metrics.cell_size.width as usize)
                 + (padding_left + padding_right)
@@ -199,7 +200,7 @@ impl super::TermWindow {
                 padding_left: padding_left + self.explorer_width(),
                 padding_top: padding_top,
                 padding_right: padding_right,
-                padding_bottom: padding_bottom,
+                padding_bottom: padding_bottom + self.status_bar_height(),
                 border: border,
                 tab_bar_height: tab_bar_height as usize,
             };
@@ -235,7 +236,8 @@ impl super::TermWindow {
                     (padding_top + padding_bottom) as usize
                         + (border.top + border.bottom).get() as usize,
                 )
-                .saturating_sub(tab_bar_height as usize);
+                .saturating_sub(tab_bar_height as usize)
+                .saturating_sub(self.status_bar_height());
 
             let rows = avail_height / self.render_metrics.cell_size.height as usize;
             let cols = avail_width / self.render_metrics.cell_size.width as usize;
@@ -258,7 +260,7 @@ impl super::TermWindow {
                 padding_left: padding_left + self.explorer_width(),
                 padding_top: padding_top,
                 padding_right: padding_right,
-                padding_bottom: padding_bottom,
+                padding_bottom: padding_bottom + self.status_bar_height(),
                 border: border,
                 tab_bar_height: tab_bar_height as usize,
             };

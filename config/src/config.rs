@@ -1687,6 +1687,10 @@ fn default_font_size() -> f64 {
 }
 
 pub(crate) fn compute_data_dir() -> anyhow::Result<PathBuf> {
+    if let Some(data_dir) = std::env::var_os("COSMOS_TERM_DATA_DIR") {
+        return Ok(PathBuf::from(data_dir));
+    }
+
     if let Some(runtime) = dirs_next::data_dir() {
         return Ok(runtime.join("cosmos-term"));
     }
@@ -1695,6 +1699,10 @@ pub(crate) fn compute_data_dir() -> anyhow::Result<PathBuf> {
 }
 
 pub(crate) fn compute_runtime_dir() -> anyhow::Result<PathBuf> {
+    if let Some(runtime_dir) = std::env::var_os("COSMOS_TERM_RUNTIME_DIR") {
+        return Ok(PathBuf::from(runtime_dir));
+    }
+
     if let Some(runtime) = dirs_next::runtime_dir() {
         return Ok(runtime.join("cosmos-term"));
     }

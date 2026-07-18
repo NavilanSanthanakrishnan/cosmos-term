@@ -163,6 +163,7 @@ pub enum UIItemType {
     BelowScrollThumb,
     Split(PositionedSplit),
     Explorer(ExplorerUiItem),
+    StatusBar,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -599,7 +600,7 @@ impl TermWindow {
         let render_metrics = RenderMetrics::new(&fontconfig)?;
         log::trace!("using render_metrics {:#?}", render_metrics);
         let explorer = ExplorerUi::load();
-        let explorer_width = explorer.total_width();
+        let explorer_width = explorer.total_width(dpi);
 
         // Initially we have only a single tab, so take that into account
         // for the tab bar state.
@@ -852,7 +853,7 @@ impl TermWindow {
             let mut myself = tw.borrow_mut();
             let webgpu = match config.front_end {
                 FrontEndSelection::WebGpu => Some(Rc::new(
-                    WebGpuState::new(&window, dimensions, &config).await?,
+                    WebGpuState::new(&window, myself.dimensions, &config).await?,
                 )),
                 _ => None,
             };
@@ -883,6 +884,41 @@ impl TermWindow {
             }
             myself.load_os_parameters();
             window.show();
+            // Cocoa can apply the last screen placement only when the window
+            // becomes visible. Re-apply the mux-requested cell geometry on the
+            // next window event, using the DPI reported by that actual screen,
+            // so mixed-DPI launches cannot leave a 2x frame or mismatched
+            // WebGPU surface behind.
+            if terminal_size.rows > 0 && terminal_size.cols > 0 {
+                let window_for_normalize = window.clone();
+                promise::spawn::spawn(async move {
+                    // Let Cocoa finish assigning the native screen before
+                    // undoing a transient zoom and applying the intended cell
+                    // geometry. The second delay lets the unzoom animation
+                    // settle before setContentSize runs.
+                    Timer::after(Duration::from_millis(300)).await;
+                    window_for_normalize.restore();
+                    Timer::after(Duration::from_millis(300)).await;
+
+                    let window_for_resize = window_for_normalize.clone();
+                    window_for_normalize.notify(TermWindowNotif::Apply(Box::new(
+                        move |term_window| {
+                            let mut requested_size = terminal_size;
+                            requested_size.dpi = term_window.dimensions.dpi as u32;
+                            // `NSWindow::isZoomed` can transiently report true
+                            // while Cocoa moves a new window between screens.
+                            term_window.window_state -= WindowState::MAXIMIZED;
+                            if let Err(err) =
+                                term_window.set_window_size(requested_size, &window_for_resize)
+                            {
+                                log::error!("normalize initial window size: {err:#}");
+                            }
+                            window_for_resize.invalidate();
+                        },
+                    )));
+                })
+                .detach();
+            }
             myself.subscribe_to_pane_updates();
             myself.schedule_explorer_tick();
             myself.emit_window_event("window-config-reloaded", None);
@@ -1908,7 +1944,8 @@ impl TermWindow {
         let border = self.get_os_border();
         let tab_bar_height = self.tab_bar_pixel_height().unwrap_or(0.);
         let tab_bar_y = if self.config.tab_bar_at_bottom {
-            ((self.dimensions.pixel_height as f32) - (tab_bar_height + border.bottom.get() as f32))
+            ((self.dimensions.pixel_height as f32)
+                - (tab_bar_height + border.bottom.get() as f32 + self.status_bar_height() as f32))
                 .max(0.)
         } else {
             border.top.get() as f32
@@ -3435,8 +3472,14 @@ impl TermWindow {
                 return;
             }
         }
-        if let Some(overlay) = self.tab_state(tab_id).overlay.take() {
+        let removed = if let Some(overlay) = self.tab_state(tab_id).overlay.take() {
             Mux::get().remove_pane(overlay.pane.pane_id());
+            true
+        } else {
+            false
+        };
+        if removed {
+            self.update_title();
         }
         if let Some(window) = self.window.as_ref() {
             window.invalidate();
@@ -3448,7 +3491,7 @@ impl TermWindow {
     }
 
     fn cancel_overlay_for_pane(&mut self, pane_id: PaneId) {
-        if let Some(overlay) = self.pane_state(pane_id).overlay.take() {
+        let removed = if let Some(overlay) = self.pane_state(pane_id).overlay.take() {
             // Ungh, when I built the CopyOverlay, its pane doesn't get
             // added to the mux and instead it reports the overlaid
             // pane id.  Take care to avoid killing ourselves off
@@ -3456,6 +3499,12 @@ impl TermWindow {
             if pane_id != overlay.pane.pane_id() {
                 Mux::get().remove_pane(overlay.pane.pane_id());
             }
+            true
+        } else {
+            false
+        };
+        if removed {
+            self.update_title();
         }
         if let Some(window) = self.window.as_ref() {
             window.invalidate();

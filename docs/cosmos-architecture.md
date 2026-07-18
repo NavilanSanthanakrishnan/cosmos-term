@@ -18,21 +18,26 @@ process embedded beside the terminal.
 This crate owns UI-independent workspace behavior:
 
 - serializable explorer state and atomic persistence
-- workspace root add/remove/rename/reorder operations
-- Follow, Project Follow, and Locked expansion semantics
-- project-root discovery
+- compatibility loading and migration of legacy workspace-root/follow state
+- exact active-pane-directory scoping
+- project-root discovery for Git decorations
 - lazy direct-directory listings and stable sorting
 - row generation for expanded directories
 - pane-context resolution for native panes and tmux
+- non-blocking Git status snapshots and porcelain parsing
+- read-only Codex usage snapshots and native active-process counting
 - filesystem change notification
 
-Three independent worker threads serve directory reads, pane-context requests,
-and filesystem watches. Responses return through a single non-blocking channel
-consumed by the window. The render thread never recursively scans a workspace.
+Four independent worker threads serve directory reads, pane-context requests,
+Git status requests, and filesystem watches. Responses return through a single
+non-blocking channel consumed by the window. The render thread never
+recursively scans a workspace, invokes Git, or reads Codex session data. Codex
+status work shares the existing pane-context worker rather than creating a
+fifth thread or helper process.
 
 Only expanded directories are watched, and watches are non-recursive. A
-periodic refresh provides a fallback if a platform watcher misses an event.
-Listings are capped at 5,000 visible entries per directory and report
+30-second periodic refresh provides a fallback if a platform watcher misses an
+event. Listings are capped at 5,000 visible entries per directory and report
 truncation inline.
 
 ### `wezterm-gui/src/termwindow/cosmos.rs`
@@ -41,14 +46,29 @@ The native window adapter owns:
 
 - persisted `ExplorerUi` state
 - active-pane polling and context application
-- render rows, header controls, status, highlights, and errors
+- Code OSS primary-sidebar title and exact compact tree geometry, proportional
+  macOS system UI row text, the bundled Code OSS Seti font, native chevrons,
+  Git decorations, list highlights, and inline errors
+- logical-to-physical DPI scaling for the complete Explorer and WebGPU color
+  output that preserves the reference CSS values on standard and wide-gamut
+  displays
 - mouse hit targets, scrolling, divider drag, and row activation
 - keyboard navigation and root prompts
 - spawning selected directories into tabs or splits
+- a native Code OSS Dark Modern status bar that reserves 22 logical pixels
+  below the Explorer and terminal
 
 The explorer width becomes a left origin offset for tab bars, panes, split
-backgrounds, and terminal rendering. Existing WezTerm widgets continue to use
-their normal layout inside the remaining viewport.
+backgrounds, and terminal rendering. The status bar similarly becomes a
+bottom layout inset for terminal rows, scrollbars, and bottom-positioned tab
+bars. Existing WezTerm widgets continue to use their normal layout inside the
+remaining viewport.
+
+Explorer rows are cached and regenerated only after directory, selection,
+expansion, or scope changes; Git decorations are looked up from their separate
+snapshot during paint. The service tick runs at 50 ms while a worker request
+is pending and backs off to 500 ms while idle, so terminal painting does not
+imply filesystem work or a permanent high-frequency timer.
 
 ### Narrow upstream integration
 
@@ -56,16 +76,23 @@ The surrounding changes are intentionally limited to:
 
 - constructing and polling the explorer from `TermWindow`
 - offsetting render/layout coordinates
-- routing explorer mouse and keyboard events
-- defining menu/command-palette actions and the default toggle key
+- routing explorer mouse and keyboard events, including explicit focus return
+  when a terminal pane is clicked
+- defining menu/command-palette actions while consuming the retired sidebar
+  toggle chord
+- resolving known registered UI fonts directly from WezTerm's built-in font
+  map before falling back to the platform font locator
 - standalone app/config/runtime identity
 - modern compiler and macOS SDK compatibility
 
 ## Pane following
 
-For a native pane, WezTerm's reported CWD is used. The explorer resolves the
-longest matching workspace root, discovers a containing Git project, and
-applies the selected follow mode.
+For a native pane, WezTerm's reported CWD is used as the sole visible Explorer
+root. The visible root is transient and independent from serialized legacy
+multi-root state, which prevents a previous root, parent, or sibling from
+leaking into the current-folder view. A containing Git project may still be
+discovered independently for status decorations; it never changes the visible
+root.
 
 For tmux, the native terminal pane still reports the outer shell's CWD, so the
 foreground process and TTY are also inspected. When the foreground process is
@@ -82,19 +109,80 @@ not depend on Homebrew being present in its reduced `PATH`. If the query
 fails, the explorer keeps the terminal usable, falls back to reported or
 last-known context, and displays the error in the sidebar.
 
-Context requests run approximately four times per second, independently from
+Context requests run approximately twice per second, independently from
 directory loading. This makes native focus and tmux pane changes visible
 without shell hooks. OSC 7 remains useful because it improves the CWD that
 WezTerm reports for native and remote-aware shells.
 
-## Follow modes
+## Git decorations
 
-- **Follow** expands every ancestor from the workspace root to the focused
-  pane's CWD and highlights the active directory.
-- **Project Follow** expands to the detected Git project boundary while keeping
-  the active context visible without continually opening every deeper folder.
-- **Locked** updates pane status but does not change expansion state.
-- **Reveal Active** performs an explicit reveal using the current mode.
+The active display root is resolved to its containing repository on a
+dedicated worker. A NUL-delimited `git status --porcelain=v1` snapshot is
+parsed into absolute file paths and refreshed independently of painting.
+Modified, added, deleted, renamed, untracked, and conflict states render at
+the right edge of their rows. `.git` itself remains excluded, matching VS
+Code's default Explorer exclusions while preserving visible dotfiles such as
+`.github`, `.vscode`, and `.gitignore`. Filesystem watcher events request an
+immediate status refresh; a 30-second poll is only a missed-event fallback.
+
+## Codex status
+
+The footer reads only structured `token_count` JSONL events under
+`$CODEX_HOME/sessions` (or `~/.codex/sessions`). It never parses prompt or
+response text. The active rollout's metadata is checked on the two-second UI
+refresh, and at most an 8 MiB tail is read only after that file changes.
+Broader rollout discovery is cached for 15 seconds, which avoids repeatedly
+walking a large session history.
+
+On macOS, active loops are counted with the native process API and require an
+executable basename of exactly `codex`. Processes such as
+`codex-code-mode-host` are excluded. This design does not spawn `ps`, `pgrep`,
+Codex CLI calls, a daemon, or any persistent status helper.
+
+## Protected close
+
+Protected close is an optional compatibility integration. When a close-lock
+credential exists, `Command+W` and `Command+Q` use the native
+`PromptInputLine` overlay with password concealment. The overlay renders one
+bullet per entered character, disables line-editor paths that could repaint
+the source value, and returns the original value only to the action callback.
+Escape cancels immediately without a notification.
+
+Cosmos verifies the existing tmux-manager close-lock credential in-process
+using PBKDF2-HMAC-SHA256 and constant-time comparison. It does not launch the
+tmux-manager AppleScript prompt, put the password in process arguments, or log
+the entered value. After successful verification, the existing tmux-manager
+autosave runs before the requested close. Any user-facing failure message is
+branded `Cosmos Term`.
+
+On a clean installation with no close-lock file, `Command+W` uses WezTerm's
+confirmed tab-close action and `Command+Q` uses the normal application-quit
+action. This keeps a personal external integration from becoming a public
+runtime dependency.
+
+The synthetic terminal used by this overlay identifies itself as
+`Cosmos Term`. Terminal state now derives its initial title from the supplied
+terminal-program identity instead of a fixed `wezterm` string, and removing an
+overlay refreshes the restored pane title.
+
+Native, SSH, and tmux-backed pane terminals also initialize with the
+`Cosmos Term` identity. The local-pane title enhancer recognizes both that
+identity and the inherited WezTerm defaults, so a foreground process or an
+application-provided OSC title can still replace the placeholder normally.
+
+## Current-folder policy
+
+The Explorer is permanently enabled and always follows the active pane's exact
+CWD. There is no user-facing Project Follow, Locked, or hide state. Legacy
+follow-mode values remain deserializable so existing state files migrate
+without loss, but runtime context application forces current-folder Follow.
+The header ellipsis and compatibility command actions simply reveal the active
+pane again.
+
+Directory requests are root-first and lazy. Persisted expanded descendants are
+requested only after they become reachable through the currently rendered
+tree. This prevents an unavailable historical descendant from delaying the
+new active root.
 
 ## Persistence
 
@@ -104,9 +192,16 @@ Explorer state is stored atomically as JSON at:
 ~/Library/Application Support/cosmos-term/workspace-state.json
 ```
 
-The file contains sidebar visibility and width, roots and labels, expanded
-directories, follow mode, and hidden-file preference. Cached listings and pane
-context are intentionally transient.
+`COSMOS_TERM_DATA_DIR` overrides this data root for isolated development and
+tests. `COSMOS_TERM_RUNTIME_DIR` similarly overrides the socket and runtime
+root. These Cosmos-only variables make it possible to exercise a second build
+without reusing a live installation's state or mux endpoints.
+
+The file contains a layout version, sidebar width, expanded directories,
+hidden-file preference, and legacy roots/follow/visibility fields. The legacy
+fields are retained for state compatibility but cannot hide, lock, or widen
+the runtime scope beyond the active pane directory. Cached listings, Git
+status, Codex status, and pane context are intentionally transient.
 
 ## Isolation
 
@@ -132,3 +227,10 @@ FreeType handling and the macOS full-screen constant adjustment are narrow
 backports from later upstream behavior. The package-specific `glium`
 optimization override is required to keep the baseline's default OpenGL
 renderer correct on the current LLVM toolchain.
+
+Cosmos also adds a narrow built-in-only font resolution entry point. Explorer
+fonts are already explicitly registered, so sending each UI size and weight
+through the generic CoreText locator only enumerated and parsed the complete
+macOS font catalog. Direct lookup preserves the same loaded-font cache and
+cap-height scaling while avoiding that transient startup allocation; unknown
+fonts still use the normal upstream resolver.

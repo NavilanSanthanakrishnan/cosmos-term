@@ -44,7 +44,8 @@ impl super::TermWindow {
             | UIItemType::BelowScrollThumb
             | UIItemType::ScrollThumb
             | UIItemType::Split(_)
-            | UIItemType::Explorer(_) => {}
+            | UIItemType::Explorer(_)
+            | UIItemType::StatusBar => {}
         }
     }
 
@@ -56,7 +57,8 @@ impl super::TermWindow {
             | UIItemType::BelowScrollThumb
             | UIItemType::ScrollThumb
             | UIItemType::Split(_)
-            | UIItemType::Explorer(_) => {}
+            | UIItemType::Explorer(_)
+            | UIItemType::StatusBar => {}
         }
     }
 
@@ -218,6 +220,15 @@ impl super::TermWindow {
             None
         };
 
+        if capture_mouse
+            && !matches!(
+                ui_item.as_ref().map(|item| &item.item_type),
+                Some(UIItemType::Explorer(_))
+            )
+        {
+            self.blur_explorer();
+        }
+
         if let Some(item) = ui_item.clone() {
             if capture_mouse {
                 self.current_mouse_capture = Some(MouseCapture::UI);
@@ -325,7 +336,10 @@ impl super::TermWindow {
             &*pane,
             current_viewport,
             self.dimensions.pixel_height.saturating_sub(
-                y_offset as usize + border.bottom.get() + bottom_bar_height as usize,
+                y_offset as usize
+                    + border.bottom.get()
+                    + bottom_bar_height as usize
+                    + self.status_bar_height(),
             ),
             self.min_scroll_bar_height() as usize,
         );
@@ -390,6 +404,9 @@ impl super::TermWindow {
             }
             UIItemType::Explorer(item) => {
                 self.mouse_event_explorer(item, event, context);
+            }
+            UIItemType::StatusBar => {
+                context.set_cursor(Some(MouseCursor::Arrow));
             }
         }
     }

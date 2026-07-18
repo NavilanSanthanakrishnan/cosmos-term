@@ -8,10 +8,13 @@ from the user.
 When the user enters the line, emits an event that allows you to act
 upon the input.
 
-`PromptInputLine` accepts two fields:
+`PromptInputLine` accepts three fields:
 
 * `description` - the text to show at the top of the display area. You may
   embed escape sequences and/or use [wezterm.format](../wezterm/format.md).
+* `password` - when `true`, displays one bullet per entered character instead
+  of rendering the entered value. The action callback still receives the
+  original value. It defaults to `false`.
 * `action` - and event callback registerd via `wezterm.action_callback`.  The
   callback's function signature is `(window, pane, line)` where `window` and
   `pane` are the [Window](../window/index.md) and [Pane](../pane/index.md)
