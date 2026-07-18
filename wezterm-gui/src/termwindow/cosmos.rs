@@ -853,6 +853,7 @@ fn markdown_document_lines(markdown: &str) -> Vec<DocumentLine> {
     let mut kind = DocumentLineKind::Body;
     let mut list_depth = 0usize;
     let mut link_destination: Option<String> = None;
+    let mut in_table = false;
 
     let flush = |lines: &mut Vec<DocumentLine>, current: &mut String, kind: DocumentLineKind| {
         if !current.is_empty() || matches!(kind, DocumentLineKind::Rule) {
@@ -892,6 +893,32 @@ fn markdown_document_lines(markdown: &str) -> Vec<DocumentLine> {
             }
             MarkdownEvent::Start(Tag::List(_)) => list_depth += 1,
             MarkdownEvent::End(Tag::List(_)) => list_depth = list_depth.saturating_sub(1),
+            MarkdownEvent::Start(Tag::Table(_)) => {
+                flush(&mut lines, &mut current, kind);
+                in_table = true;
+                kind = DocumentLineKind::Code;
+            }
+            MarkdownEvent::End(Tag::Table(_)) => {
+                flush(&mut lines, &mut current, kind);
+                in_table = false;
+                kind = DocumentLineKind::Body;
+                lines.push(DocumentLine {
+                    text: String::new(),
+                    kind,
+                });
+            }
+            MarkdownEvent::Start(Tag::TableHead) | MarkdownEvent::Start(Tag::TableRow) => {
+                flush(&mut lines, &mut current, kind);
+            }
+            MarkdownEvent::End(Tag::TableHead) | MarkdownEvent::End(Tag::TableRow) => {
+                flush(&mut lines, &mut current, DocumentLineKind::Code);
+            }
+            MarkdownEvent::Start(Tag::TableCell) => {
+                if !current.is_empty() {
+                    current.push_str("  │  ");
+                }
+            }
+            MarkdownEvent::End(Tag::TableCell) => {}
             MarkdownEvent::Start(Tag::Item) => {
                 flush(&mut lines, &mut current, kind);
                 kind = DocumentLineKind::List;
@@ -919,20 +946,26 @@ fn markdown_document_lines(markdown: &str) -> Vec<DocumentLine> {
                 current.push('`');
             }
             MarkdownEvent::SoftBreak | MarkdownEvent::HardBreak => {
-                flush(&mut lines, &mut current, kind);
-                if kind == DocumentLineKind::Quote {
-                    current.push_str("│ ");
+                if in_table {
+                    current.push(' ');
+                } else {
+                    flush(&mut lines, &mut current, kind);
+                    if kind == DocumentLineKind::Quote {
+                        current.push_str("│ ");
+                    }
                 }
             }
             MarkdownEvent::End(Tag::Paragraph) => {
-                flush(&mut lines, &mut current, kind);
-                if !matches!(kind, DocumentLineKind::List | DocumentLineKind::Quote) {
-                    lines.push(DocumentLine {
-                        text: String::new(),
-                        kind: DocumentLineKind::Body,
-                    });
+                if !in_table {
+                    flush(&mut lines, &mut current, kind);
+                    if !matches!(kind, DocumentLineKind::List | DocumentLineKind::Quote) {
+                        lines.push(DocumentLine {
+                            text: String::new(),
+                            kind: DocumentLineKind::Body,
+                        });
+                    }
+                    kind = DocumentLineKind::Body;
                 }
-                kind = DocumentLineKind::Body;
             }
             MarkdownEvent::Rule => {
                 flush(&mut lines, &mut current, kind);
@@ -944,7 +977,24 @@ fn markdown_document_lines(markdown: &str) -> Vec<DocumentLine> {
             MarkdownEvent::TaskListMarker(checked) => {
                 current.push_str(if checked { "☑ " } else { "☐ " });
             }
-            MarkdownEvent::Html(html) => current.push_str(&html),
+            MarkdownEvent::Html(html) => {
+                let (heading, text, block_break) = markdown_html_text(&html);
+                if let Some(level) = heading {
+                    flush(&mut lines, &mut current, kind);
+                    if !text.is_empty() {
+                        lines.push(DocumentLine {
+                            text,
+                            kind: DocumentLineKind::Heading(level),
+                        });
+                    }
+                    kind = DocumentLineKind::Body;
+                } else if !text.is_empty() {
+                    current.push_str(&text);
+                }
+                if block_break {
+                    flush(&mut lines, &mut current, kind);
+                }
+            }
             MarkdownEvent::FootnoteReference(reference) => {
                 current.push('[');
                 current.push_str(&reference);
@@ -962,6 +1012,33 @@ fn markdown_document_lines(markdown: &str) -> Vec<DocumentLine> {
         lines.pop();
     }
     lines
+}
+
+fn markdown_html_text(html: &str) -> (Option<u8>, String, bool) {
+    let lower = html.to_ascii_lowercase();
+    let heading = (1..=6).find(|level| lower.contains(&format!("<h{level}")));
+    let block_break = heading.is_some()
+        || lower.contains("<br")
+        || lower.contains("</p>")
+        || lower.contains("</div>");
+    let mut visible = String::new();
+    let mut inside_tag = false;
+    for character in html.chars() {
+        match character {
+            '<' => inside_tag = true,
+            '>' => inside_tag = false,
+            _ if !inside_tag => visible.push(character),
+            _ => {}
+        }
+    }
+    let visible = visible
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'");
+    let visible = visible.split_whitespace().collect::<Vec<_>>().join(" ");
+    (heading, visible, block_break)
 }
 
 fn previous_char_boundary(text: &str, cursor: usize) -> usize {
