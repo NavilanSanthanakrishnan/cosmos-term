@@ -285,6 +285,13 @@ impl super::TermWindow {
                 }
             }
 
+            if only_key_bindings == OnlyKeyBindings::No
+                && self.file_workspace_key_down(&keycode, raw_modifiers)
+            {
+                context.invalidate();
+                return true;
+            }
+
             if let Some((entry, table_name)) = self.lookup_key(
                 pane,
                 &keycode,

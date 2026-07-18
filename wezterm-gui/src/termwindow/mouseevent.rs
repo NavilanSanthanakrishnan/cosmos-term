@@ -45,6 +45,7 @@ impl super::TermWindow {
             | UIItemType::ScrollThumb
             | UIItemType::Split(_)
             | UIItemType::Explorer(_)
+            | UIItemType::FileWorkspace(_)
             | UIItemType::StatusBar => {}
         }
     }
@@ -58,6 +59,7 @@ impl super::TermWindow {
             | UIItemType::ScrollThumb
             | UIItemType::Split(_)
             | UIItemType::Explorer(_)
+            | UIItemType::FileWorkspace(_)
             | UIItemType::StatusBar => {}
         }
     }
@@ -223,7 +225,7 @@ impl super::TermWindow {
         if capture_mouse
             && !matches!(
                 ui_item.as_ref().map(|item| &item.item_type),
-                Some(UIItemType::Explorer(_))
+                Some(UIItemType::Explorer(_)) | Some(UIItemType::FileWorkspace(_))
             )
         {
             self.blur_explorer();
@@ -368,6 +370,7 @@ impl super::TermWindow {
                 self.drag_explorer_divider(&event, context);
                 self.dragging.replace((item, start_event));
             }
+            UIItemType::FileWorkspace(_) => {}
             _ => {
                 log::error!("drag not implemented for {:?}", item);
             }
@@ -404,6 +407,9 @@ impl super::TermWindow {
             }
             UIItemType::Explorer(item) => {
                 self.mouse_event_explorer(item, event, context);
+            }
+            UIItemType::FileWorkspace(item) => {
+                self.mouse_event_file_workspace(item, event, context);
             }
             UIItemType::StatusBar => {
                 context.set_cursor(Some(MouseCursor::Arrow));
@@ -488,9 +494,11 @@ impl super::TermWindow {
         match event.kind {
             WMEK::Press(MousePress::Left) => match item {
                 TabBarItem::Tab { tab_idx, .. } => {
+                    self.return_to_terminal_workspace();
                     self.activate_tab(tab_idx as isize).ok();
                 }
                 TabBarItem::NewTabButton { .. } => {
+                    self.return_to_terminal_workspace();
                     self.do_new_tab_button_click(MousePress::Left);
                 }
                 TabBarItem::None | TabBarItem::LeftStatus | TabBarItem::RightStatus => {

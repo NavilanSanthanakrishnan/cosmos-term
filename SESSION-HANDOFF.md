@@ -175,6 +175,38 @@ explorer and using independent application/runtime identities.
   `ce0f160ebd6747a8bb40c3b115f6478b8cb22c9acb26b53b5b316ad7fe22cff8`.
   GitHub reports both the ZIP and portable checksum assets uploaded, and the
   archive passed `unzip -t`.
+- A native file workspace is implemented in the release candidate. `Command+P`
+  replaces only the right-side presentation with bounded Quick Open while the
+  terminal/tmux pane remains alive underneath. Explorer file activation uses
+  the same native loader. Markdown is rendered with headings, lists, quotes,
+  code, rules, task markers, visible link destinations, and width-aware prose
+  wrapping; other UTF-8 files use a code-oriented view.
+- `Command+E` toggles preview/edit, `Command+S` performs a same-directory
+  atomic save, Escape moves from edit to preview and preview to the live
+  terminal, and `Command+Shift+D` deliberately discards edits. The header
+  identifies the active path and exposes `‹ TERMINAL`, `EDIT`, and `PREVIEW`
+  controls. File loads are limited to 2 MiB, reject binary/out-of-root paths,
+  and saves refuse to overwrite a file whose revision changed externally.
+- Search, load, and save run through a fifth on-demand workspace worker. It
+  sleeps on its channel while idle, caps search at 20,000 visited entries and
+  200 results, excludes `.git` and `node_modules`, and does not follow
+  symlinks. The release test process had no new helper/daemon; its only child
+  was the requested shell and an idle sample read 0.0% CPU.
+- The isolated signed release completed open → edit → type → atomic save →
+  preview → terminal with the GUI process continuously alive. The workspace
+  suite now has 23 passing tests, including out-of-root rejection, atomic
+  save cleanup, and external-revision conflict. Full GUI/CLI/mux checks,
+  release packaging, strict signature verification, plist validation, and
+  `git diff --check` pass. The repository-wide format check still reports only
+  the pre-existing `window/src/os/macos/app.rs` difference.
+- Before installation, the current protected-close app was copied to
+  `~/Applications/Cosmos Term Releases/Cosmos Term-command-w-protected-2026-07-18.app`
+  (GUI SHA-256 `f0a610f933616a6c5ab8e656c8e2a76492e01b8a9b965ed7e6cf1a0155f8d2ca`).
+  The signed candidate is staged as
+  `Cosmos Term-file-workspace-2026-07-18.app` in the same directory (GUI
+  SHA-256 `0abf05679ebeafde8265bdbeb65a168277ed20f2f87e83259365dd4a50ad015e`).
+  At this handoff point the installed PID 80878 is deliberately still running
+  the protected-close build; it was not killed or overwritten.
 
 ## Verification commands
 
