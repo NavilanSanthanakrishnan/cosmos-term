@@ -2,14 +2,32 @@ local wezterm = require 'wezterm'
 
 local config = wezterm.config_builder()
 local act = wezterm.action
+local home = os.getenv 'HOME' or ''
+local tmux_manager_bin = os.getenv('TMUX_MANAGER_BIN')
+  or (home .. '/.local/bin/tmux-manager')
 local autosave_command = {
-  '/Users/navilan/.local/bin/tmux-manager',
+  tmux_manager_bin,
   'autosave',
   'workspace',
 }
 local tmux_manager_state_dir = os.getenv('TMUX_MANAGER_STATE_DIR')
-  or '/Users/navilan/.local/state/tmux-manager'
-local close_lock_path = tmux_manager_state_dir:gsub('/+$', '') .. '/close-lock.json'
+  or (home .. '/.local/state/tmux-manager')
+local close_lock_path = os.getenv('COSMOS_TERM_CLOSE_LOCK_FILE')
+  or (tmux_manager_state_dir:gsub('/+$', '') .. '/close-lock.json')
+
+local function file_exists(path)
+  local file = io.open(path, 'rb')
+  if file == nil then
+    return false
+  end
+  file:close()
+  return true
+end
+
+-- Protected close is an optional local integration. Existing users with a
+-- close-lock credential retain the password + autosave flow; a clean install
+-- uses WezTerm's standard confirmation and has no external dependency.
+local protected_close_enabled = file_exists(close_lock_path)
 
 -- Cosmos is a terminal workbench rather than a compact terminal window. These
 -- defaults leave enough room for the persistent explorer and make both the
@@ -89,6 +107,16 @@ config.window_close_confirmation = 'AlwaysPrompt'
 
 -- Send Shift+Backspace as a distinct xterm modified-key sequence so tmux can
 -- use it as the prefix without taking over ordinary Backspace.
+local close_tab_action = act.CloseCurrentTab { confirm = true }
+local quit_action = act.QuitApplication
+if protected_close_enabled then
+  close_tab_action = protected_save_then(
+    act.CloseCurrentTab { confirm = false },
+    'this tab and all of its processes'
+  )
+  quit_action = protected_save_then(act.QuitApplication, 'Cosmos Term')
+end
+
 config.keys = {
   {
     key = 'Backspace',
@@ -98,10 +126,7 @@ config.keys = {
   {
     key = 'w',
     mods = 'SUPER',
-    action = protected_save_then(
-      act.CloseCurrentTab { confirm = false },
-      'this tab and all of its processes'
-    ),
+    action = close_tab_action,
   },
   {
     -- The explorer is a permanent workbench region. Consume the legacy
@@ -113,7 +138,7 @@ config.keys = {
   {
     key = 'q',
     mods = 'SUPER',
-    action = protected_save_then(act.QuitApplication, 'Cosmos Term'),
+    action = quit_action,
   },
 }
 

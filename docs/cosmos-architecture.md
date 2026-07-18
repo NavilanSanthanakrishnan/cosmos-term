@@ -141,11 +141,12 @@ Codex CLI calls, a daemon, or any persistent status helper.
 
 ## Protected close
 
-`Command+W` and `Command+Q` use the native `PromptInputLine` overlay with
-password concealment. The overlay renders one bullet per entered character,
-disables line-editor paths that could repaint the source value, and returns
-the original value only to the action callback. Escape cancels immediately
-without a notification.
+Protected close is an optional compatibility integration. When a close-lock
+credential exists, `Command+W` and `Command+Q` use the native
+`PromptInputLine` overlay with password concealment. The overlay renders one
+bullet per entered character, disables line-editor paths that could repaint
+the source value, and returns the original value only to the action callback.
+Escape cancels immediately without a notification.
 
 Cosmos verifies the existing tmux-manager close-lock credential in-process
 using PBKDF2-HMAC-SHA256 and constant-time comparison. It does not launch the
@@ -154,10 +155,20 @@ the entered value. After successful verification, the existing tmux-manager
 autosave runs before the requested close. Any user-facing failure message is
 branded `Cosmos Term`.
 
+On a clean installation with no close-lock file, `Command+W` uses WezTerm's
+confirmed tab-close action and `Command+Q` uses the normal application-quit
+action. This keeps a personal external integration from becoming a public
+runtime dependency.
+
 The synthetic terminal used by this overlay identifies itself as
 `Cosmos Term`. Terminal state now derives its initial title from the supplied
 terminal-program identity instead of a fixed `wezterm` string, and removing an
 overlay refreshes the restored pane title.
+
+Native, SSH, and tmux-backed pane terminals also initialize with the
+`Cosmos Term` identity. The local-pane title enhancer recognizes both that
+identity and the inherited WezTerm defaults, so a foreground process or an
+application-provided OSC title can still replace the placeholder normally.
 
 ## Current-folder policy
 
@@ -180,6 +191,11 @@ Explorer state is stored atomically as JSON at:
 ```text
 ~/Library/Application Support/cosmos-term/workspace-state.json
 ```
+
+`COSMOS_TERM_DATA_DIR` overrides this data root for isolated development and
+tests. `COSMOS_TERM_RUNTIME_DIR` similarly overrides the socket and runtime
+root. These Cosmos-only variables make it possible to exercise a second build
+without reusing a live installation's state or mux endpoints.
 
 The file contains a layout version, sidebar width, expanded directories,
 hidden-file preference, and legacy roots/follow/visibility fields. The legacy

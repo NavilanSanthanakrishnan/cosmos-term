@@ -1,12 +1,13 @@
 # Cosmos Term Session Handoff
 
-Updated: 2026-07-17
+Updated: 2026-07-18
 
 ## Current state
 
 V1 is implemented, packaged, and installed at
-`/Applications/Cosmos Term.app`. The source workspace is the private
-repository `NavilanSanthanakrishnan/cosmos-term` on branch `main`.
+`/Applications/Cosmos Term.app`. Public-launch changes are staged on
+`agent/public-product-launch`; the repository remains private until that
+reviewed branch is merged and the visibility change is confirmed.
 
 Cosmos Term is a native WezTerm fork, not a wrapper. It retains terminal tabs,
 splits, rendering, Lua configuration, and mux behavior while adding the left
@@ -16,6 +17,13 @@ explorer and using independent application/runtime identities.
 
 - Signed arm64 macOS bundle launches as `Cosmos Term` with bundle ID
   `com.navilan.cosmos-term`.
+- The application now uses a dark galaxy/black-hole icon with a violet-cyan
+  accretion ring and subtle terminal mark. The 1024 px PNG is the source of
+  truth, and `assets/icon/build-cosmos-macos.sh` reproducibly generates the
+  bundled macOS ICNS.
+- Native, SSH, tmux, and synthetic pane terminals use `Cosmos Term` as their
+  initial program identity. Foreground process names and application-provided
+  terminal titles continue to replace that placeholder normally.
 - The explorer renders permanently beside normal terminal content and remains
   resizable.
 - The Explorer styling is sourced from Code OSS and the supplied reference:
@@ -76,6 +84,9 @@ explorer and using independent application/runtime identities.
 - Existing WezTerm and default tmux clients remained unchanged during testing.
 - A hostile inherited `WEZTERM_CONFIG_FILE` and `WEZTERM_UNIX_SOCKET` do not
   redirect Cosmos Term; its bundled config and Cosmos socket are used.
+- `COSMOS_TERM_DATA_DIR` and `COSMOS_TERM_RUNTIME_DIR` provide explicit
+  disposable roots for isolated release testing without sharing the installed
+  application's state or sockets.
 - Parent `WEZTERM_*` protocol/config variables and stale `TMUX`/`TMUX_PANE`
   attachment values are absent from newly spawned Cosmos terminal shells.
 - `Command+W` opens a password-masked `COSMOS TERM CLOSE LOCK` overlay, verifies
@@ -84,6 +95,11 @@ explorer and using independent application/runtime identities.
   its panes. Escape or failed verification blocks the close. The password is
   not logged or passed through process arguments. `Command+Q` retains the
   equivalent protected whole-application autosave/close flow.
+- Protected close is capability-detected in the public bundled config. Existing
+  users with a close-lock file retain the password/autosave flow; a clean
+  installation uses confirmed `Command+W` and normal `Command+Q` without a
+  tmux-manager dependency. Both bundled-config modes were verified with
+  `show-keys`.
 - The external tmux-manager AppleScript dialog and `tmux Manager` notification
   identity are no longer used. Canceling is silent; any failure toast is
   branded `Cosmos Term`. Overlay cancellation also restores the underlying
@@ -131,6 +147,12 @@ explorer and using independent application/runtime identities.
   `/tmp/cosmos-visual/cosmos-close-lock-final.png`
   (`5d38d0c72f9ad7e7c97f95b2449148b9d3fd691fd751107d7507864e64b523dd`,
   2486 × 1702 at Retina resolution).
+- The public README screenshot is
+  `docs/screenshots/cosmos-term-workbench.png`
+  (`1d52dcb06d1e7b48696bfda1c67aba28a49445d9be81c68f31be75d643aa1f68`,
+  2776 × 1478). It was captured from an isolated packaged process; the
+  installed Cosmos PID and default tmux clients were unchanged before and
+  after the capture.
 
 ## Verification commands
 
@@ -178,6 +200,8 @@ intentional:
 
 ## Remaining release work
 
-The local bundle is ad-hoc signed and is not notarized. Automated macOS CI,
-release artifacts, and migration to a newer upstream WezTerm baseline are
-future work, not V1 blockers.
+- Merge the reviewed public-launch branch, change the GitHub repository to
+  public, and publish the first arm64 prerelease artifact.
+- The local bundle is ad-hoc signed and is not notarized.
+- Automated release packaging and migration to a newer upstream WezTerm
+  baseline remain future work.
