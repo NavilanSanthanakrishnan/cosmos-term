@@ -10,9 +10,10 @@ cargo check -p wezterm-gui -p wezterm -p wezterm-mux-server
 git diff --check
 ```
 
-The workspace tests cover follow expansion, Locked behavior, root matching and
-deduplication, directory sorting/filtering, persistence, and process
-detection.
+The workspace tests cover legacy follow-state compatibility, root matching and
+deduplication, folder-scoped row isolation, layout migration, Git porcelain
+parsing, directory sorting/filtering, persistence, structured Codex usage
+parsing, reset selection, and exact executable-name process detection.
 
 ## Release bundle
 
@@ -27,23 +28,73 @@ Confirm that the bundle contains `cosmos-term-gui`, `cosmos-term`, and
 `cosmos-term-mux-server`, and that the plist reports
 `com.navilan.cosmos-term`.
 
+## Performance regression
+
+Measure a fresh Finder-style launch with the same CWD, window geometry,
+display, and settling time used for a fresh WezTerm comparison:
+
+```sh
+footprint <pid>
+vmmap -summary <pid>
+top -l 30 -s 1 -pid <pid> -stats pid,cpu,mem,command
+sample <pid> 12 1 -file /tmp/cosmos-cpu-sample.txt
+```
+
+On the 2026-07-17 reference Mac, the pre-optimization Cosmos build reached a
+954–956 MiB physical-footprint peak and averaged 1.21% idle CPU. The optimized
+installed bundle measured 81.8 MiB current footprint, 237.6 MiB peak, and
+0.48% average idle CPU across 30 steady-state samples. A matched fresh WezTerm
+launch measured 56.8 MiB current, 137.1 MiB peak, and 0.54% average idle CPU.
+Treat these as machine-specific reference values: regressions should be judged
+against a matched launch rather than a universal absolute threshold.
+
+The high-water check must not show hundreds of MiB retained in empty
+`MALLOC_SMALL` regions. A native sample should show the Cosmos worker threads
+blocked on their channels between requests, with no persistent font-catalog
+enumeration, directory scan from paint, or external status helper.
+
 The old `glium` dependency must retain its package-specific release
-`opt-level = 0`. Test the default OpenGL renderer; a WebGPU-only success does
-not verify the configured default.
+`opt-level = 0` for compatibility. The bundled Cosmos config intentionally
+selects WebGPU because its sRGB surface preserves VS Code theme values on both
+standard and wide-gamut macOS displays. Validate that configured default at
+both 72 and 144 DPI.
+
+On a mixed-DPI Mac, launch from both the standard and Retina screens. After
+Cocoa completes placement, the window must settle to the configured 100 × 32
+terminal geometry plus the 520 logical-pixel Explorer and 22 logical-pixel
+status bar. Type into the terminal and move the window between screens; it
+must not re-expand, retain stale WebGPU quads, or change the Explorer's
+apparent scale.
 
 ## Config and protocol isolation
 
 Launch or query Cosmos Term with deliberately hostile WezTerm variables:
 
 ```sh
+test_root="$(mktemp -d /tmp/cosmos-config-test.XXXXXX)"
 env \
+  COSMOS_TERM_CLOSE_LOCK_FILE="$test_root/missing-close-lock.json" \
+  COSMOS_TERM_DATA_DIR="$test_root/data" \
+  COSMOS_TERM_RUNTIME_DIR="$test_root/runtime" \
   WEZTERM_CONFIG_FILE=/tmp/must-not-load.lua \
   WEZTERM_UNIX_SOCKET=/tmp/must-not-connect.sock \
-  "dist/Cosmos Term.app/Contents/MacOS/cosmos-term" show-keys
+  "dist/Cosmos Term.app/Contents/MacOS/cosmos-term" \
+  --config-file "$PWD/dist/Cosmos Term.app/Contents/Resources/cosmos.lua" \
+  show-keys
 ```
 
-The command must load the bundled Cosmos config and list
-`ToggleFileExplorer`. It must not require or connect to WezTerm.
+The command must load the bundled Cosmos config, list `Command+Shift+E` as
+`Nop`, list `Command+W` as a confirmed `CloseCurrentTab`, and contain no key
+assignment that hides, locks, or changes Explorer scope. It must not require
+tmux-manager or connect to WezTerm. The explicit config path ensures an
+existing developer config cannot mask the bundled release config during this
+probe.
+
+Run a second `show-keys` query with the actual protected-close environment, if
+one is configured. In that mode `Command+W` and `Command+Q` must be custom
+event callbacks backed by the concealed in-app prompt. Do not test the success
+path against a live tab: use a temporary PBKDF2 credential, disposable state,
+and a dedicated tmux socket.
 
 When Cosmos is launched from inside an existing WezTerm/tmux pane, inspect the
 new Cosmos shell:
@@ -59,21 +110,51 @@ It must print no inherited WezTerm protocol/config values and no stale
 
 Use only panes created in Cosmos Term.
 
-1. Launch with a known repository CWD and confirm the matching root is
-   highlighted.
-2. Run `cd` into a nested directory and confirm the explorer expands and
-   highlights it.
+1. Launch with a known repository CWD and confirm that folder is the sole
+   visible root. No saved historical root may flash before it resolves.
+2. Run `cd` into a nested directory and confirm it becomes the sole visible
+   root without parent or sibling folders.
 3. Create a split with a different CWD. Switch focus in both directions and
    confirm the highlight and status follow the focused pane.
 4. Create and remove a directory under an expanded root. Confirm it appears
    and disappears without restarting.
-5. Resize the divider, change expansion state, restart, and confirm the width,
-   roots, expansion, and follow mode persist.
-6. Select Locked, change the terminal CWD, and confirm status updates while
-   expansion state remains byte-for-byte unchanged.
-7. Open a selected directory in a tab and a split.
-8. Use an invalid or inaccessible root and confirm an inline error without a
+5. Resize the divider, change expansion state, restart, and confirm the width
+   and reachable expansion state persist while the new pane CWD remains the
+   sole root.
+6. Open a selected directory in a tab and a split.
+7. Use an invalid or inaccessible root and confirm an inline error without a
    crash or blocked terminal.
+8. Focus an Explorer row and press `L`. Confirm literal `l` reaches the shell
+   and the Explorer remains visible; there is no lock or hide binding.
+9. Click the terminal, type a command containing `.` and press Return. Confirm
+    the command reaches the shell and no explorer action runs.
+10. Press `Command+Shift+E` and confirm the sidebar remains visible and no `E`
+    reaches the shell.
+11. In a Git worktree, modify a visible file and confirm a right-aligned `M`
+    appears and refreshes without blocking terminal input.
+12. Press `Command+W` and confirm the in-app `COSMOS TERM CLOSE LOCK` screen
+    appears with no `tmux Manager` dialog or notification. Type a disposable
+    value and confirm only bullets render, then press Escape and confirm the
+    tab and its processes remain intact. In a disposable test tab backed by a
+    dedicated tmux socket and temporary close-lock credential, enter the
+    correct passphrase and confirm the workspace is saved before the tab and
+    all of its panes close.
+13. Capture native window screenshots on 72 DPI and 144 DPI displays. Confirm
+    the Explorer remains 520 logical pixels wide with a 35 px title, 22 px
+    rows, 13/15 px text, and exact `#252526` background and `#37373D` inactive
+    selection pixels on the 72 DPI reference display.
+14. While the terminal repaints under rapid input, confirm cached expanded
+    directories are not re-read. Expand an uncached folder and confirm its
+    worker result appears on the 50 ms service-response cycle; watcher and
+    periodic refreshes must remain the only background rescan paths.
+15. Confirm the bottom bar reports the current Codex usage window, nearest
+    reset, and active loop count. Start one disposable `codex` executable and
+    confirm the count increments within two seconds; stop it and confirm the
+    count decrements without restarting Cosmos.
+16. Inspect Cosmos child processes while the footer updates. Confirm there is
+    no status helper, shell loop, daemon, or repeated `ps`/`pgrep` process.
+    Updating the active rollout should not trigger a full session-tree walk;
+    broad discovery is rate-limited to once per 15 seconds.
 
 ## Isolated tmux matrix
 
@@ -112,5 +193,7 @@ recorded baseline.
 - Installed WezTerm PID is still running if it was running before the test.
 - Default tmux sessions and clients are unchanged.
 - Cosmos sockets exist only below its runtime directory.
+- The isolated data/runtime override directories contain no sockets belonging
+  to the live installation.
 - No `dist/`, logs, runtime JSON from the home directory, or secrets are
   staged for Git.

@@ -1,17 +1,73 @@
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use base64::Engine;
+use ring::pbkdf2;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::ffi::OsStr;
-use std::fs;
-use std::io;
+use std::fs::{self, File};
+use std::io::{self, Read, Seek, SeekFrom};
+use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::time::SystemTime;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-pub const DEFAULT_SIDEBAR_WIDTH: usize = 300;
-pub const MIN_SIDEBAR_WIDTH: usize = 190;
-pub const MAX_SIDEBAR_WIDTH: usize = 720;
+const CURRENT_LAYOUT_VERSION: u8 = 4;
+pub const DEFAULT_SIDEBAR_WIDTH: usize = 520;
+pub const MIN_SIDEBAR_WIDTH: usize = 240;
+pub const MAX_SIDEBAR_WIDTH: usize = 840;
 pub const MAX_DIRECTORY_ENTRIES: usize = 5_000;
+const CODEX_ROLLOUT_INITIAL_TAIL_BYTES: u64 = 512 * 1024;
+const CODEX_ROLLOUT_MAX_TAIL_BYTES: u64 = 8 * 1024 * 1024;
+const CODEX_ROLLOUT_DISCOVERY_INTERVAL: Duration = Duration::from_secs(15);
+const CODEX_ROLLOUT_CANDIDATE_LIMIT: usize = 16;
+
+#[derive(Deserialize)]
+struct CloseLockCredential {
+    kdf: String,
+    iterations: u32,
+    salt: String,
+    digest: String,
+}
+
+pub fn verify_close_lock(path: &Path, passphrase: &str) -> io::Result<bool> {
+    let data = fs::read(path)?;
+    verify_close_lock_credential(&data, passphrase)
+}
+
+fn verify_close_lock_credential(data: &[u8], passphrase: &str) -> io::Result<bool> {
+    if passphrase.is_empty() {
+        return Ok(false);
+    }
+    let credential: CloseLockCredential = serde_json::from_slice(data)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    if credential.kdf != "pbkdf2-hmac-sha256" {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "unsupported close-lock credential",
+        ));
+    }
+    let iterations = NonZeroU32::new(credential.iterations).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "close-lock iterations must be nonzero",
+        )
+    })?;
+    let salt = BASE64_STANDARD
+        .decode(credential.salt)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    let expected = BASE64_STANDARD
+        .decode(credential.digest)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    Ok(pbkdf2::verify(
+        pbkdf2::PBKDF2_HMAC_SHA256,
+        iterations,
+        &salt,
+        passphrase.as_bytes(),
+        &expected,
+    )
+    .is_ok())
+}
 
 fn default_true() -> bool {
     true
@@ -72,6 +128,8 @@ impl WorkspaceRoot {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExplorerState {
+    #[serde(default)]
+    pub layout_version: u8,
     #[serde(default = "default_true")]
     pub visible: bool,
     #[serde(default = "default_width")]
@@ -89,12 +147,13 @@ pub struct ExplorerState {
 impl Default for ExplorerState {
     fn default() -> Self {
         Self {
+            layout_version: CURRENT_LAYOUT_VERSION,
             visible: true,
             width_px: DEFAULT_SIDEBAR_WIDTH,
             roots: vec![],
             expanded: BTreeSet::new(),
             follow_mode: FollowMode::Follow,
-            show_hidden: false,
+            show_hidden: true,
         }
     }
 }
@@ -108,6 +167,13 @@ impl ExplorerState {
         };
         let mut state: Self = serde_json::from_slice(&data)
             .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+        if state.layout_version < CURRENT_LAYOUT_VERSION {
+            state.layout_version = CURRENT_LAYOUT_VERSION;
+            state.visible = true;
+            state.width_px = DEFAULT_SIDEBAR_WIDTH;
+            state.show_hidden = true;
+            state.follow_mode = FollowMode::Follow;
+        }
         state.width_px = state.width_px.clamp(MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH);
         state.deduplicate_roots();
         Ok(state)
@@ -300,6 +366,9 @@ impl DirectoryListing {
                         }
                     };
                     let name = item.file_name().to_string_lossy().to_string();
+                    if matches!(name.as_str(), ".git" | ".DS_Store") {
+                        continue;
+                    }
                     if !show_hidden && name.starts_with('.') {
                         continue;
                     }
@@ -368,6 +437,10 @@ pub struct DirectoryCache {
 }
 
 impl DirectoryCache {
+    pub fn is_loaded(&self, path: &Path) -> bool {
+        self.listings.contains_key(path)
+    }
+
     pub fn mark_loading(&mut self, path: PathBuf) -> bool {
         self.loading.insert(path)
     }
@@ -391,20 +464,44 @@ impl DirectoryCache {
     pub fn rows(&self, state: &ExplorerState) -> Vec<ExplorerRow> {
         let mut rows = vec![];
         for (root_index, root) in state.roots.iter().enumerate() {
-            let expanded = state.expanded.contains(&root.path);
-            rows.push(ExplorerRow {
-                path: Some(root.path.clone()),
-                root_index,
-                depth: 0,
-                label: root.name.clone(),
-                kind: ExplorerRowKind::Root,
-                expanded,
-            });
-            if expanded {
-                self.append_children(state, root_index, &root.path, 1, &mut rows);
-            }
+            self.append_root(state, root, root_index, &mut rows);
         }
         rows
+    }
+
+    /// Build the explorer tree for a single visible root. This is used by the
+    /// UI's folder-scoped Follow modes so saved multi-root workspace state does
+    /// not leak parent or sibling directories into the current view.
+    pub fn rows_for_root(
+        &self,
+        state: &ExplorerState,
+        root: &WorkspaceRoot,
+        root_index: usize,
+    ) -> Vec<ExplorerRow> {
+        let mut rows = vec![];
+        self.append_root(state, root, root_index, &mut rows);
+        rows
+    }
+
+    fn append_root(
+        &self,
+        state: &ExplorerState,
+        root: &WorkspaceRoot,
+        root_index: usize,
+        rows: &mut Vec<ExplorerRow>,
+    ) {
+        let expanded = state.expanded.contains(&root.path);
+        rows.push(ExplorerRow {
+            path: Some(root.path.clone()),
+            root_index,
+            depth: 0,
+            label: root.name.clone(),
+            kind: ExplorerRowKind::Root,
+            expanded,
+        });
+        if expanded {
+            self.append_children(state, root_index, &root.path, 1, rows);
+        }
     }
 
     fn append_children(
@@ -600,17 +697,426 @@ pub fn tmux_current_path(tty_name: &str, tmux_executable: &str) -> Result<PathBu
     Ok(PathBuf::from(path))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GitFileStatus {
+    Modified,
+    Added,
+    Deleted,
+    Renamed,
+    Untracked,
+    Conflict,
+}
+
+impl GitFileStatus {
+    fn from_porcelain(code: &[u8]) -> Option<Self> {
+        if code == b"??" {
+            return Some(Self::Untracked);
+        }
+        if code.len() != 2 || code == b"!!" {
+            return None;
+        }
+        if code.contains(&b'U')
+            || matches!(code, b"AA" | b"DD")
+            || (code.contains(&b'A') && code.contains(&b'D'))
+        {
+            Some(Self::Conflict)
+        } else if code.contains(&b'D') {
+            Some(Self::Deleted)
+        } else if code.contains(&b'R') || code.contains(&b'C') {
+            Some(Self::Renamed)
+        } else if code.contains(&b'A') {
+            Some(Self::Added)
+        } else if code.contains(&b'M') || code.contains(&b'T') {
+            Some(Self::Modified)
+        } else {
+            None
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Modified => "M",
+            Self::Added => "A",
+            Self::Deleted => "D",
+            Self::Renamed => "R",
+            Self::Untracked => "U",
+            Self::Conflict => "!",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitStatusSnapshot {
+    pub requested_root: PathBuf,
+    pub repository_root: Option<PathBuf>,
+    pub statuses: HashMap<PathBuf, GitFileStatus>,
+}
+
+impl GitStatusSnapshot {
+    pub fn read(requested_root: &Path) -> Self {
+        let requested_root = normalize_existing_path(requested_root.to_path_buf());
+        let repository_root = find_project_root(&requested_root);
+        let mut snapshot = Self {
+            requested_root,
+            repository_root: repository_root.clone(),
+            statuses: HashMap::new(),
+        };
+        let repository_root = match repository_root {
+            Some(root) => root,
+            None => return snapshot,
+        };
+        let output = match Command::new("git")
+            .current_dir(&repository_root)
+            .args(["status", "--porcelain=v1", "-z", "--untracked-files=all"])
+            .output()
+        {
+            Ok(output) if output.status.success() => output,
+            _ => return snapshot,
+        };
+        snapshot.statuses = parse_git_status(&repository_root, &output.stdout);
+        snapshot
+    }
+}
+
+fn parse_git_status(repository_root: &Path, porcelain: &[u8]) -> HashMap<PathBuf, GitFileStatus> {
+    let records = porcelain
+        .split(|byte| *byte == 0)
+        .filter(|record| !record.is_empty())
+        .collect::<Vec<_>>();
+    let mut statuses = HashMap::new();
+    let mut index = 0;
+    while index < records.len() {
+        let record = records[index];
+        if record.len() < 4 || record[2] != b' ' {
+            index += 1;
+            continue;
+        }
+        let status = GitFileStatus::from_porcelain(&record[..2]);
+        let renamed = record[..2].contains(&b'R') || record[..2].contains(&b'C');
+        let path = &record[3..];
+        if let Some(status) = status {
+            statuses.insert(
+                repository_root.join(String::from_utf8_lossy(path).as_ref()),
+                status,
+            );
+        }
+        if renamed && index + 1 < records.len() {
+            // Porcelain v1's -z form reports a rename as destination followed
+            // by source; the destination is the path decorated in the tree.
+            index += 1;
+        }
+        index += 1;
+    }
+    statuses
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodexRateLimit {
+    pub used_percent: u8,
+    pub window_minutes: u64,
+    pub resets_at: Option<u64>,
+}
+
+impl CodexRateLimit {
+    pub fn window_label(&self) -> String {
+        match self.window_minutes {
+            300 => "5h".to_string(),
+            1_440 => "day".to_string(),
+            10_080 => "week".to_string(),
+            43_200 | 44_640 => "month".to_string(),
+            minutes if minutes % 10_080 == 0 => format!("{}w", minutes / 10_080),
+            minutes if minutes % 1_440 == 0 => format!("{}d", minutes / 1_440),
+            minutes if minutes % 60 == 0 => format!("{}h", minutes / 60),
+            minutes => format!("{minutes}m"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CodexStatusSnapshot {
+    pub active_loops: usize,
+    pub primary: Option<CodexRateLimit>,
+    pub secondary: Option<CodexRateLimit>,
+    pub total_tokens: Option<u64>,
+    pub source_updated_at: Option<u64>,
+}
+
+impl CodexStatusSnapshot {
+    pub fn read(codex_home: &Path) -> Self {
+        CodexStatusReader::default().read(codex_home)
+    }
+
+    pub fn usage_label(&self) -> String {
+        let format_limit = |limit: &CodexRateLimit| {
+            format!("{} {}% used", limit.window_label(), limit.used_percent)
+        };
+        match (&self.primary, &self.secondary) {
+            (Some(primary), Some(secondary)) => {
+                format!(
+                    "Codex {} · {}",
+                    format_limit(primary),
+                    format_limit(secondary)
+                )
+            }
+            (Some(primary), None) => format!("Codex {}", format_limit(primary)),
+            (None, Some(secondary)) => format!("Codex {}", format_limit(secondary)),
+            (None, None) => "Codex usage unavailable".to_string(),
+        }
+    }
+
+    pub fn reset_label(&self, now: SystemTime) -> Option<String> {
+        let reset = [
+            self.primary.as_ref().and_then(|limit| limit.resets_at),
+            self.secondary.as_ref().and_then(|limit| limit.resets_at),
+        ]
+        .into_iter()
+        .flatten()
+        .min()?;
+        let now = now.duration_since(UNIX_EPOCH).ok()?.as_secs();
+        let remaining = reset.saturating_sub(now);
+        let label = if remaining == 0 {
+            "reset due".to_string()
+        } else if remaining < 60 * 60 {
+            format!("resets in {}m", (remaining / 60).max(1))
+        } else if remaining < 24 * 60 * 60 {
+            format!("resets in {}h", (remaining / (60 * 60)).max(1))
+        } else {
+            format!("resets in {}d", (remaining / (24 * 60 * 60)).max(1))
+        };
+        Some(label)
+    }
+}
+
+#[derive(Default)]
+struct CodexStatusReader {
+    observed_head: Option<(SystemTime, PathBuf)>,
+    last_discovery: Option<Instant>,
+    snapshot: CodexStatusSnapshot,
+}
+
+impl CodexStatusReader {
+    fn read(&mut self, codex_home: &Path) -> CodexStatusSnapshot {
+        self.snapshot.active_loops = codex_loop_count();
+        let now = Instant::now();
+        let mut discover = self
+            .last_discovery
+            .map(|last| now.duration_since(last) >= CODEX_ROLLOUT_DISCOVERY_INTERVAL)
+            .unwrap_or(true);
+        let mut rollouts = Vec::new();
+
+        if !discover {
+            if let Some((observed_modified, path)) = &self.observed_head {
+                match fs::metadata(path).and_then(|metadata| metadata.modified()) {
+                    Ok(modified) if modified != *observed_modified => {
+                        rollouts.push((modified, path.clone()));
+                    }
+                    Ok(_) => return self.snapshot.clone(),
+                    Err(_) => discover = true,
+                }
+            } else {
+                return self.snapshot.clone();
+            }
+        }
+
+        if discover {
+            rollouts = newest_rollout_paths(&codex_home.join("sessions"));
+            self.last_discovery = Some(now);
+        }
+
+        let head = rollouts.first().cloned();
+        if head == self.observed_head {
+            return self.snapshot.clone();
+        }
+        self.observed_head = head;
+        for (modified, path) in rollouts.into_iter().take(CODEX_ROLLOUT_CANDIDATE_LIMIT) {
+            if let Some((primary, secondary, total_tokens)) = read_latest_codex_token_count(&path) {
+                self.snapshot.primary = primary;
+                self.snapshot.secondary = secondary;
+                self.snapshot.total_tokens = total_tokens;
+                self.snapshot.source_updated_at = modified
+                    .duration_since(UNIX_EPOCH)
+                    .ok()
+                    .map(|duration| duration.as_secs());
+                break;
+            }
+        }
+        self.snapshot.clone()
+    }
+}
+
+fn newest_rollout_paths(root: &Path) -> Vec<(SystemTime, PathBuf)> {
+    let mut stack = vec![root.to_path_buf()];
+    let mut rollouts = Vec::with_capacity(CODEX_ROLLOUT_CANDIDATE_LIMIT);
+    while let Some(directory) = stack.pop() {
+        let entries = match fs::read_dir(directory) {
+            Ok(entries) => entries,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            let file_type = match entry.file_type() {
+                Ok(file_type) => file_type,
+                Err(_) => continue,
+            };
+            if file_type.is_dir() {
+                stack.push(entry.path());
+                continue;
+            }
+            let path = entry.path();
+            if path.extension() != Some(OsStr::new("jsonl")) {
+                continue;
+            }
+            let modified = entry
+                .metadata()
+                .and_then(|metadata| metadata.modified())
+                .unwrap_or(UNIX_EPOCH);
+            let candidate = (modified, path);
+            if rollouts.len() < CODEX_ROLLOUT_CANDIDATE_LIMIT {
+                rollouts.push(candidate);
+            } else if let Some((oldest_index, oldest)) = rollouts
+                .iter()
+                .enumerate()
+                .min_by_key(|(_, (modified, _))| *modified)
+            {
+                if candidate.0 > oldest.0 {
+                    rollouts[oldest_index] = candidate;
+                }
+            }
+        }
+    }
+    rollouts.sort_by(|left, right| right.0.cmp(&left.0));
+    rollouts
+}
+
+fn read_latest_codex_token_count(
+    path: &Path,
+) -> Option<(Option<CodexRateLimit>, Option<CodexRateLimit>, Option<u64>)> {
+    let mut file = File::open(path).ok()?;
+    let length = file.metadata().ok()?.len();
+    let mut tail_bytes = CODEX_ROLLOUT_INITIAL_TAIL_BYTES;
+    loop {
+        let start = length.saturating_sub(tail_bytes);
+        file.seek(SeekFrom::Start(start)).ok()?;
+        let mut tail = Vec::with_capacity((length - start) as usize);
+        file.read_to_end(&mut tail).ok()?;
+        let text = String::from_utf8_lossy(&tail);
+        if let Some(status) = text.lines().rev().find_map(parse_codex_token_count_line) {
+            return Some(status);
+        }
+        if start == 0 || tail_bytes >= CODEX_ROLLOUT_MAX_TAIL_BYTES {
+            return None;
+        }
+        tail_bytes = (tail_bytes * 2).min(CODEX_ROLLOUT_MAX_TAIL_BYTES);
+    }
+}
+
+fn parse_codex_token_count_line(
+    line: &str,
+) -> Option<(Option<CodexRateLimit>, Option<CodexRateLimit>, Option<u64>)> {
+    if !line.contains("\"type\":\"token_count\"") {
+        return None;
+    }
+    let value: serde_json::Value = serde_json::from_str(line).ok()?;
+    let payload = value.get("payload")?;
+    if payload.get("type")?.as_str()? != "token_count" {
+        return None;
+    }
+    let rate_limits = payload.get("rate_limits");
+    let parse_limit = |name: &str| {
+        let limit = rate_limits?.get(name)?;
+        if limit.is_null() {
+            return None;
+        }
+        let used_percent = limit.get("used_percent")?.as_f64()?.round().clamp(0., 100.) as u8;
+        Some(CodexRateLimit {
+            used_percent,
+            window_minutes: limit.get("window_minutes")?.as_u64()?,
+            resets_at: limit.get("resets_at").and_then(|value| value.as_u64()),
+        })
+    };
+    let total_tokens = payload
+        .pointer("/info/total_token_usage/total_tokens")
+        .and_then(|value| value.as_u64());
+    Some((
+        parse_limit("primary"),
+        parse_limit("secondary"),
+        total_tokens,
+    ))
+}
+
+fn is_codex_loop_executable(path: &Path) -> bool {
+    path.file_name() == Some(OsStr::new("codex"))
+}
+
+#[cfg(target_os = "macos")]
+fn codex_loop_count() -> usize {
+    let count = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
+    if count <= 0 {
+        return 0;
+    }
+    let mut pids = vec![0 as libc::pid_t; count as usize + 32];
+    let count = unsafe {
+        libc::proc_listallpids(
+            pids.as_mut_ptr() as *mut _,
+            std::mem::size_of_val(pids.as_slice()) as _,
+        )
+    };
+    if count <= 0 {
+        return 0;
+    }
+    pids.truncate((count as usize).min(pids.len()));
+    let mut buffer = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+    let mut active = 0;
+    for pid in pids {
+        let length =
+            unsafe { libc::proc_pidpath(pid, buffer.as_mut_ptr() as *mut _, buffer.len() as u32) };
+        if length <= 0 {
+            continue;
+        }
+        if is_codex_loop_executable(Path::new(OsStr::from_bytes(&buffer[..length as usize]))) {
+            active += 1;
+        }
+    }
+    active
+}
+
+#[cfg(target_os = "macos")]
+use std::os::unix::ffi::OsStrExt;
+
+#[cfg(target_os = "linux")]
+fn codex_loop_count() -> usize {
+    fs::read_dir("/proc")
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|entry| fs::read_link(entry.path().join("exe")).ok())
+        .filter(|path| is_codex_loop_executable(path))
+        .count()
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn codex_loop_count() -> usize {
+    0
+}
+
 #[derive(Debug, Clone)]
 pub enum ServiceResponse {
     DirectoryListed(DirectoryListing),
     ContextResolved(PaneContext),
+    GitStatusLoaded(GitStatusSnapshot),
+    CodexStatusLoaded(CodexStatusSnapshot),
     DirectoryChanged(Vec<PathBuf>),
     WatcherError(String),
 }
 
+enum ContextRequest {
+    Pane(PaneContextRequest),
+    CodexStatus(PathBuf),
+}
+
 pub struct WorkspaceService {
     directory_tx: Sender<(PathBuf, bool)>,
-    context_tx: Sender<PaneContextRequest>,
+    context_tx: Sender<ContextRequest>,
+    git_status_tx: Sender<PathBuf>,
     watch_tx: Sender<HashSet<PathBuf>>,
     response_rx: Receiver<ServiceResponse>,
 }
@@ -618,7 +1124,8 @@ pub struct WorkspaceService {
 impl WorkspaceService {
     pub fn new() -> Self {
         let (directory_tx, directory_rx) = mpsc::channel::<(PathBuf, bool)>();
-        let (context_tx, context_rx) = mpsc::channel::<PaneContextRequest>();
+        let (context_tx, context_rx) = mpsc::channel::<ContextRequest>();
+        let (git_status_tx, git_status_rx) = mpsc::channel::<PathBuf>();
         let (watch_tx, watch_rx) = mpsc::channel::<HashSet<PathBuf>>();
         let (response_tx, response_rx) = mpsc::channel();
         let directory_response_tx = response_tx.clone();
@@ -641,10 +1148,33 @@ impl WorkspaceService {
         std::thread::Builder::new()
             .name("cosmos-pane-context".to_string())
             .spawn(move || {
+                let mut codex_status_reader = CodexStatusReader::default();
                 while let Ok(request) = context_rx.recv() {
-                    if context_response_tx
-                        .send(ServiceResponse::ContextResolved(PaneContext::resolve(
-                            request,
+                    let response = match request {
+                        ContextRequest::Pane(request) => {
+                            ServiceResponse::ContextResolved(PaneContext::resolve(request))
+                        }
+                        ContextRequest::CodexStatus(codex_home) => {
+                            ServiceResponse::CodexStatusLoaded(
+                                codex_status_reader.read(&codex_home),
+                            )
+                        }
+                    };
+                    if context_response_tx.send(response).is_err() {
+                        break;
+                    }
+                }
+            })
+            .expect("spawn cosmos pane context resolver");
+
+        let git_response_tx = response_tx.clone();
+        std::thread::Builder::new()
+            .name("cosmos-git-status".to_string())
+            .spawn(move || {
+                while let Ok(root) = git_status_rx.recv() {
+                    if git_response_tx
+                        .send(ServiceResponse::GitStatusLoaded(GitStatusSnapshot::read(
+                            &root,
                         )))
                         .is_err()
                     {
@@ -652,7 +1182,7 @@ impl WorkspaceService {
                     }
                 }
             })
-            .expect("spawn cosmos pane context resolver");
+            .expect("spawn cosmos git status reader");
 
         std::thread::Builder::new()
             .name("cosmos-filesystem-watcher".to_string())
@@ -696,6 +1226,7 @@ impl WorkspaceService {
         Self {
             directory_tx,
             context_tx,
+            git_status_tx,
             watch_tx,
             response_rx,
         }
@@ -706,7 +1237,17 @@ impl WorkspaceService {
     }
 
     pub fn resolve_context(&self, request: PaneContextRequest) {
-        let _ = self.context_tx.send(request);
+        let _ = self.context_tx.send(ContextRequest::Pane(request));
+    }
+
+    pub fn codex_status(&self, codex_home: PathBuf) {
+        let _ = self
+            .context_tx
+            .send(ContextRequest::CodexStatus(codex_home));
+    }
+
+    pub fn git_status(&self, root: PathBuf) {
+        let _ = self.git_status_tx.send(root);
     }
 
     pub fn watch_directories(&self, paths: HashSet<PathBuf>) {
@@ -728,6 +1269,33 @@ impl Default for WorkspaceService {
 mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn verifies_tmux_manager_close_lock_credentials() {
+        let passphrase = "cosmos-test-passphrase";
+        let salt = b"cosmos-test-salt";
+        let iterations = NonZeroU32::new(10).unwrap();
+        let mut digest = [0u8; 32];
+        pbkdf2::derive(
+            pbkdf2::PBKDF2_HMAC_SHA256,
+            iterations,
+            salt,
+            passphrase.as_bytes(),
+            &mut digest,
+        );
+        let credential = serde_json::to_vec(&serde_json::json!({
+            "format_version": 1,
+            "kdf": "pbkdf2-hmac-sha256",
+            "iterations": iterations.get(),
+            "salt": BASE64_STANDARD.encode(salt),
+            "digest": BASE64_STANDARD.encode(digest),
+        }))
+        .unwrap();
+
+        assert!(verify_close_lock_credential(&credential, passphrase).unwrap());
+        assert!(!verify_close_lock_credential(&credential, "incorrect").unwrap());
+        assert!(!verify_close_lock_credential(&credential, "").unwrap());
+    }
 
     fn temporary_path(name: &str) -> PathBuf {
         let nonce = SystemTime::now()
@@ -787,9 +1355,67 @@ mod tests {
     }
 
     #[test]
+    fn legacy_state_migrates_to_vscode_layout_defaults() {
+        let path = temporary_path("legacy-layout").join("state.json");
+        let mut state = ExplorerState::default();
+        state.layout_version = 0;
+        state.visible = false;
+        state.width_px = 300;
+        state.show_hidden = false;
+        state.follow_mode = FollowMode::Locked;
+        state.save(&path).unwrap();
+
+        let migrated = ExplorerState::load(&path).unwrap();
+        assert_eq!(migrated.layout_version, CURRENT_LAYOUT_VERSION);
+        assert!(migrated.visible);
+        assert_eq!(migrated.width_px, DEFAULT_SIDEBAR_WIDTH);
+        assert!(migrated.show_hidden);
+        assert_eq!(migrated.follow_mode, FollowMode::Follow);
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn prior_layout_migrates_to_roomier_sidebar() {
+        let path = temporary_path("roomier-sidebar").join("state.json");
+        let mut state = ExplorerState::default();
+        state.layout_version = CURRENT_LAYOUT_VERSION - 1;
+        state.width_px = 355;
+        state.save(&path).unwrap();
+
+        let migrated = ExplorerState::load(&path).unwrap();
+        assert_eq!(migrated.layout_version, CURRENT_LAYOUT_VERSION);
+        assert_eq!(migrated.width_px, DEFAULT_SIDEBAR_WIDTH);
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn parses_git_porcelain_decorations() {
+        let root = Path::new("/projects/cosmos");
+        let statuses = parse_git_status(
+            root,
+            b" M src/serviceWorker.js\0?? src/new file.js\0R  src/current.js\0src/old.js\0",
+        );
+
+        assert_eq!(
+            statuses.get(&root.join("src/serviceWorker.js")),
+            Some(&GitFileStatus::Modified)
+        );
+        assert_eq!(
+            statuses.get(&root.join("src/new file.js")),
+            Some(&GitFileStatus::Untracked)
+        );
+        assert_eq!(
+            statuses.get(&root.join("src/current.js")),
+            Some(&GitFileStatus::Renamed)
+        );
+        assert!(!statuses.contains_key(&root.join("src/old.js")));
+    }
+
+    #[test]
     fn directory_listing_is_lazy_and_sorted() {
         let root = temporary_path("listing");
         fs::create_dir_all(root.join("z-dir")).unwrap();
+        fs::create_dir_all(root.join(".git")).unwrap();
         fs::write(root.join("a-file"), b"hello").unwrap();
         fs::write(root.join(".hidden"), b"secret").unwrap();
         let listing = DirectoryListing::read(&root, false);
@@ -797,7 +1423,66 @@ mod tests {
         assert!(listing.entries[0].is_dir);
         assert_eq!(listing.entries[0].name, "z-dir");
         assert_eq!(listing.entries[1].name, "a-file");
+        let visible_hidden = DirectoryListing::read(&root, true);
+        assert!(visible_hidden
+            .entries
+            .iter()
+            .any(|entry| entry.name == ".hidden"));
+        assert!(!visible_hidden
+            .entries
+            .iter()
+            .any(|entry| entry.name == ".git"));
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn scoped_rows_only_include_the_visible_root() {
+        let visible = temporary_path("visible-root");
+        let sibling = temporary_path("sibling-root");
+        fs::create_dir_all(visible.join("inside")).unwrap();
+        fs::create_dir_all(sibling.join("outside")).unwrap();
+
+        let mut state = ExplorerState::default();
+        state.add_root(visible.clone());
+        state.add_root(sibling.clone());
+        state.expanded.insert(visible.clone());
+        state.expanded.insert(sibling.clone());
+
+        let mut cache = DirectoryCache::default();
+        cache.apply(DirectoryListing::read(&visible, false));
+        cache.apply(DirectoryListing::read(&sibling, false));
+        let scoped = WorkspaceRoot::new(visible.clone());
+        let rows = cache.rows_for_root(&state, &scoped, usize::MAX);
+
+        assert!(rows.iter().any(|row| row.label == "inside"));
+        assert!(!rows.iter().any(|row| row.label == "outside"));
+
+        let _ = fs::remove_dir_all(visible);
+        let _ = fs::remove_dir_all(sibling);
+    }
+
+    #[test]
+    fn scoped_rows_do_not_show_parent_siblings() {
+        let parent = temporary_path("scoped-parent");
+        let visible = parent.join("cosmos");
+        fs::create_dir_all(visible.join("src")).unwrap();
+        fs::create_dir_all(parent.join("unrelated")).unwrap();
+
+        let mut state = ExplorerState::default();
+        state.add_root(parent.clone());
+        state.expanded.insert(parent.clone());
+        state.expanded.insert(visible.clone());
+
+        let mut cache = DirectoryCache::default();
+        cache.apply(DirectoryListing::read(&parent, false));
+        cache.apply(DirectoryListing::read(&visible, false));
+        let rows = cache.rows_for_root(&state, &WorkspaceRoot::new(visible.clone()), usize::MAX);
+
+        assert_eq!(rows[0].path.as_deref(), Some(visible.as_path()));
+        assert!(rows.iter().any(|row| row.label == "src"));
+        assert!(!rows.iter().any(|row| row.label == "unrelated"));
+
+        let _ = fs::remove_dir_all(parent);
     }
 
     #[test]
@@ -806,5 +1491,98 @@ mod tests {
         assert!(process_is_tmux(Some("tmux")));
         assert!(!process_is_tmux(Some("/bin/zsh")));
         assert!(!process_is_tmux(None));
+    }
+
+    #[test]
+    fn parses_codex_usage_without_reading_transcript_content() {
+        let line = r#"{"timestamp":"2026-07-17T06:46:16.167Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"total_tokens":217947530}},"rate_limits":{"primary":{"used_percent":48.4,"window_minutes":10080,"resets_at":1784780148},"secondary":{"used_percent":12.0,"window_minutes":300,"resets_at":1784300000}}}}"#;
+        let (primary, secondary, total_tokens) = parse_codex_token_count_line(line).unwrap();
+        assert_eq!(
+            primary,
+            Some(CodexRateLimit {
+                used_percent: 48,
+                window_minutes: 10_080,
+                resets_at: Some(1_784_780_148),
+            })
+        );
+        assert_eq!(
+            secondary,
+            Some(CodexRateLimit {
+                used_percent: 12,
+                window_minutes: 300,
+                resets_at: Some(1_784_300_000),
+            })
+        );
+        assert_eq!(total_tokens, Some(217_947_530));
+    }
+
+    #[test]
+    fn codex_rollout_discovery_keeps_only_bounded_candidates() {
+        let root = temporary_path("codex-rollouts");
+        fs::create_dir_all(&root).unwrap();
+        for index in 0..(CODEX_ROLLOUT_CANDIDATE_LIMIT + 9) {
+            fs::write(root.join(format!("rollout-{index:02}.jsonl")), b"{}\n").unwrap();
+        }
+
+        let rollouts = newest_rollout_paths(&root);
+        assert_eq!(rollouts.len(), CODEX_ROLLOUT_CANDIDATE_LIMIT);
+        assert!(rollouts.windows(2).all(|pair| pair[0].0 >= pair[1].0));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn formats_compact_codex_status_labels() {
+        let status = CodexStatusSnapshot {
+            active_loops: 5,
+            primary: Some(CodexRateLimit {
+                used_percent: 48,
+                window_minutes: 10_080,
+                resets_at: None,
+            }),
+            secondary: None,
+            total_tokens: None,
+            source_updated_at: None,
+        };
+        assert_eq!(status.usage_label(), "Codex week 48% used");
+        assert_eq!(
+            CodexRateLimit {
+                used_percent: 1,
+                window_minutes: 300,
+                resets_at: None,
+            }
+            .window_label(),
+            "5h"
+        );
+    }
+
+    #[test]
+    fn shows_the_next_codex_reset() {
+        let now = UNIX_EPOCH + Duration::from_secs(1_000);
+        let status = CodexStatusSnapshot {
+            primary: Some(CodexRateLimit {
+                used_percent: 48,
+                window_minutes: 10_080,
+                resets_at: Some(1_000 + 3 * 24 * 60 * 60),
+            }),
+            secondary: Some(CodexRateLimit {
+                used_percent: 12,
+                window_minutes: 300,
+                resets_at: Some(1_000 + 2 * 60 * 60),
+            }),
+            ..CodexStatusSnapshot::default()
+        };
+        assert_eq!(status.reset_label(now).as_deref(), Some("resets in 2h"));
+    }
+
+    #[test]
+    fn counts_only_the_codex_root_executable_name() {
+        assert!(is_codex_loop_executable(Path::new(
+            "/Users/example/.local/bin/codex"
+        )));
+        assert!(!is_codex_loop_executable(Path::new(
+            "/Users/example/.local/bin/codex-code-mode-host"
+        )));
+        assert!(!is_codex_loop_executable(Path::new("/usr/bin/node")));
     }
 }

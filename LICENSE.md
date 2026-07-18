@@ -1,5 +1,6 @@
 MIT License
 
+Copyright (c) 2026 Navilan Santhanakrishnan
 Copyright (c) 2018-Present Wez Furlong
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -28,3 +29,9 @@ WezTerm bundles `Symbols Nerd Font Mono`, built from only those icon sets
 available from https://github.com/ryanoasis/nerd-fonts which are clearly
 distributed under the terms of the OFL 1.1.
 Note that WezTerm excludes the Pomicons icon set from this collection.
+
+Cosmos Term additionally bundles the VS Code Seti file icon font under
+the MIT license. Its license text is in `assets/fonts/LICENSE_SETI.txt`.
+
+The Cosmos Term application icon and Cosmos-specific source changes are
+distributed under this MIT license.

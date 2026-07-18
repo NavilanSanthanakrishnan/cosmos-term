@@ -270,6 +270,8 @@ impl crate::TermWindow {
         }
 
         self.paint_explorer(&mut layers).context("paint_explorer")?;
+        self.paint_status_bar(&mut layers)
+            .context("paint_status_bar")?;
 
         self.paint_window_borders(&mut layers)
             .context("paint_window_borders")?;

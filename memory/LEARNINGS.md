@@ -6,7 +6,13 @@
 - Standalone identity requires changing more than the bundle name: config
   discovery, data/cache/runtime paths, socket and pane environment variables,
   companion executable lookup, window class, log identity, and CLI defaults
-  must all be distinct.
+  must all be distinct. Terminal model constructors are part of that surface:
+  their program identity becomes the initial pane, tab, and native window
+  title before a shell emits its own title.
+- Provide Cosmos-specific data and runtime directory overrides for isolated
+  build tests. They allow a second GUI/CLI process to run without reading or
+  writing the active installation's state or sockets; never repurpose
+  `WEZTERM_*` variables for this.
 - Clear inherited WezTerm protocol/config variables at Cosmos bootstrap. Keep a
   GUI-level `TMUX` value available for pane lookup when Cosmos was launched
   from that server, but strip `TMUX`, `TMUX_PANE`, and `WEZTERM_*` from newly
@@ -24,6 +30,83 @@
 - Explorer rendering shares WezTerm's quad layers. Surface, header, and row
   backgrounds must remain below text; placing those backgrounds on a later
   layer hides otherwise correctly shaped glyphs.
+- `render_screen_line` retains terminal-cell placement even when supplied a
+  proportional font. Native sidebar labels need box-model shaping and direct
+  glyph quad emission. Snap screen-space glyph origins to whole pixels before
+  applying the centered render offset; this materially improves small UI
+  labels. This baseline's CoreText locator does not enumerate Apple's private
+  system-font alias, but its FreeType parser can register the OS-owned
+  `/System/Library/Fonts/SFNS.ttf` face as `System Font` without redistributing
+  it.
+- Do not send an explicitly registered UI font through the generic platform
+  locator. On macOS that path can enumerate and parse the complete CoreText
+  catalog for every size/weight variant, producing a nearly 1 GiB transient
+  startup peak. Resolve known built-in faces directly, retain the normal font
+  cache and cap-height scaling, and fall back to platform lookup only when the
+  face is not registered.
+- For exact VS Code file icons, embed Code OSS's Seti font and retain its MIT
+  license; visually similar Nerd Font glyphs use different outlines and
+  codepoints. Keep Git status invocation on its own worker and parse
+  NUL-delimited porcelain output so spaces and renames remain safe.
+- Keep the active Explorer display root transient and separate from persisted
+  legacy multi-root state. Runtime context application must force the active
+  pane's exact CWD as the sole root so historical roots, parents, and siblings
+  cannot leak into the tree.
+- Treat Explorer geometry as logical CSS pixels and scale the complete layout
+  at the window DPI. Scaling only the font or only row constants causes overlap
+  or a tiny sidebar when moving between standard and Retina displays.
+- Native CoreGraphics captures are required for renderer validation; app
+  previews can hide DPI and color-profile errors. On this macOS baseline,
+  WebGPU's sRGB surface emits the VS Code `#252526` sidebar value exactly,
+  while the legacy OpenGL path visibly lifts it on wide-gamut displays.
+- On mixed-DPI macOS setups, provisional pixel geometry can be interpreted as
+  AppKit points before Cocoa assigns the final screen, and `isZoomed` can be
+  transiently true during that placement. Use the active screen DPI for the
+  initial pixel-to-point conversion, then reconcile the requested terminal
+  cells after native placement/unzoom settles and invalidate the resized
+  WebGPU surface.
+- Queue the active display root before any expanded descendants. Derive later
+  requests from directories reachable through the currently rendered tree so
+  an unavailable stale expansion cannot block the current CWD.
+- Never queue directory reads from the Explorer paint path. Gate initial
+  requests on cache presence, explicitly force only watcher/periodic/user
+  refreshes, and queue newly reachable persisted descendants when a parent
+  listing arrives. Otherwise every terminal repaint can trigger filesystem
+  work and make input feel laggy. Keep worker-response polling faster than pane
+  context polling, and use `CachePolicy::AllowStale` so process discovery never
+  stalls the UI thread.
+- Cache generated Explorer rows and invalidate them only for visual state
+  changes. Use a fast service-response interval only while work is pending,
+  back off while idle, and let watcher events drive directory and Git updates
+  with a slow periodic fallback. Reapplying unchanged pane context or Git
+  state at timer frequency is avoidable idle CPU.
+- A custom `Command+W` assignment bypasses WezTerm's window-close
+  confirmation. Wrap `CloseCurrentTab` in the close-lock verifier and
+  pre-close autosave callback when destructive tab closure must require the
+  same custom passphrase as `Command+Q`.
+- Personal integrations must be capability-detected rather than public
+  dependencies. Enable protected close only when its credential exists; use
+  normal confirmed close and quit actions on a clean installation.
+- Do not delegate a product-owned password prompt to an AppleScript helper:
+  macOS exposes the helper's name in the dialog and notifications. A concealed
+  in-app prompt plus in-process PBKDF2 verification keeps the close password
+  out of process arguments, logs, line history, and external app identity.
+  Canceling an overlay must also refresh the window title from the restored
+  pane.
+- A live Codex footer does not need a daemon or CLI subprocess. Read only
+  structured `token_count` lines from the changed rollout tail, cache broader
+  session discovery, and use native process enumeration with an exact `codex`
+  executable-basename match. This keeps multi-gigabyte session histories and
+  similarly named helper processes from making the UI noisy or inaccurate.
+  Keep rollout candidates bounded and reuse the macOS process-path buffer
+  across PIDs so each two-second count does not allocate once per process.
+- Canvas-drawn explorer focus must be released explicitly when a terminal pane
+  is clicked. Native window focus alone does not identify which in-window
+  region owns keyboard events; without the handoff, `.` and Return can trigger
+  explorer actions while the user is typing a shell command.
+- A persistent sidebar should consume its retired toggle chord with `Nop`.
+  Merely removing the default assignment can forward the modified character to
+  the terminal on this baseline.
 - Current Rust requires null-safe FreeType bitmap and outline slice handling
   for this older upstream baseline. The fixes match later upstream WezTerm
   behavior.
@@ -36,3 +119,7 @@
   later upstream WezTerm.
 - Live tmux testing must use a dedicated socket and explicit `tmux -S` commands.
   Always compare default tmux clients before and after the test.
+- Before publishing a long-lived fork, replace inherited release, scheduled,
+  issue-automation, and Pages workflows with a minimal fork-owned CI surface.
+  Preserve upstream licensing and history, but do not let obsolete upstream
+  automation publish or mutate the fork under the wrong product assumptions.

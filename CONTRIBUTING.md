@@ -1,131 +1,97 @@
-# Contributing to wezterm
+# Contributing to Cosmos Term
 
-Thanks for considering donating your time and energy!  I value any contribution,
-even if it is just to highlight a typo.
+Thanks for helping improve Cosmos Term. This project is a focused WezTerm fork:
+preserve terminal compatibility and place product behavior near explicit Cosmos
+integration seams.
 
-Included here are some guidelines that can help streamline taking in your contribution.
-They are just guidelines and not hard-and-fast rules.  Things will probably go faster
-and smoother if you have the time and energy to read and follow these suggestions.
+## Before opening a change
 
-## Contributing Documentation
+- Search existing issues and discussions.
+- Report security-sensitive behavior privately through
+  [SECURITY.md](SECURITY.md).
+- Confirm whether a terminal-core issue also reproduces in upstream WezTerm.
+- Keep pull requests focused and include user-visible intent.
 
-There's never enough!  Pretty much anything is fair game to improve here.
+## Development setup
 
-### Running the doc build yourself
+Cosmos currently targets macOS on Apple silicon.
 
-To check your documentation additions, you can optionally build the docs yourself and see how the changes will look on the webpage. 
-
-To serve them up, and then automatically rebuild and refresh the docs in your browser, run:
-```console
-$ ci/build-docs.sh serve
-```
-And then click on the URL that it prints out after it has performed the first build.
-
-Any arguments passed to `build-docs.sh` are passed down to the underlying `mkdocs` utility.
-
-Look at [mkdocs serve](https://www.mkdocs.org/user-guide/cli/#mkdocs-serve) for more information on additional parameters.
-
-### Operating system specific installation instructions?
-
-There are a lot of targets out there.  Today we have docs that are Ubuntu biased
-and I know that there are a lot flavors of Linux.  Rather than expand the README
-with instructions for those, please translate the instructions into steps that
-can be run in the [`get-deps`](https://github.com/wez/wezterm/blob/master/get-deps)
-script.
-
-## Contributing code
-
-Yes please!
-
-If you are new to the Rust language check out <https://doc.rust-lang.org/rust-by-example/>.
-
-### Where to find things?
-
-The `term` directory holds the core terminal model code.  This is agnostic
-of any windowing system.  If you want to add support for terminal escape
-sequences and that sort of thing, you probably want to be in the `term` dir.
-Keep in mind that for maximal compatibility and utility `wezterm` aims to
-be compatible with the `xterm` behavior.
-https://invisible-island.net/xterm/ctlseqs/ctlseqs.html is a useful resource!
-
-The `src` directory holds the code for the `wezterm` program.  This is
-the GUI renderer for the terminal model.  If you want to change something
-about the GUI you want to be in the `src` dir.
-
-### Iterating
-
-I tend to iterate and sanity check as I develop using `cargo check`; it
-will type-check your code without generating code which is much faster
-than building everything in release mode:
-
-```console
-$ cargo check
+```sh
+git clone --recurse-submodules \
+  https://github.com/NavilanSanthanakrishnan/cosmos-term.git
+cd cosmos-term
+cargo test -p cosmos-workspace
+cargo check -p wezterm-gui -p wezterm -p wezterm-mux-server
 ```
 
-Likewise, if you want to quick check that something works, you can run it
-in debug mode using:
+For a release bundle:
 
-```console
-$ cargo run
+```sh
+cargo build --release -p wezterm-gui -p wezterm -p wezterm-mux-server
+ci/package-cosmos-macos.sh
+codesign --verify --deep --strict "dist/Cosmos Term.app"
+plutil -lint "dist/Cosmos Term.app/Contents/Info.plist"
 ```
 
-This will produce a debug instrumented binary with poor optimization.  This will
-give you more detail in the backtrace produced if you run `RUST_BACKTRACE=1 cargo run`.
+## Code map
 
-If you get a panic and want to examine local variables, you'll need to use gdb:
+| Area | Location |
+| --- | --- |
+| Explorer state, directory cache, workers | `cosmos-workspace` |
+| Native Explorer rendering and input | `wezterm-gui/src/termwindow/cosmos.rs` |
+| Bundled defaults | `assets/cosmos/cosmos.lua` |
+| macOS packaging | `ci/package-cosmos-macos.sh` |
+| Architecture decisions | `docs/cosmos-architecture.md` |
+| Live and isolation tests | `docs/cosmos-testing.md` |
 
-```console
-$ cargo build
-$ gdb ./target/debug/wezterm
-$ break rust_panic               # hit tab to complete the name of the panic symbol!
-$ run
-$ bt
+Changes to upstream modules should be narrow, documented, and justified when a
+Cosmos seam cannot contain the behavior.
+
+## Safety rules
+
+- Never stop, reconfigure, or reuse a contributor's installed WezTerm process.
+- Never mutate the default tmux server during tests.
+- Every mutating tmux test must use an explicit dedicated socket:
+
+  ```sh
+  tmux -S /tmp/cosmos-term-test-$$.sock ...
+  ```
+
+- Keep Cosmos config, data, cache, sockets, bundle ID, and protocol environment
+  distinct from WezTerm.
+- Do not commit generated `dist/` bundles, logs, runtime state, raw sessions,
+  credentials, personal terminal output, or absolute user paths.
+- Preserve upstream attribution and bundled third-party licenses.
+
+For an isolated Cosmos test process, set `COSMOS_TERM_DATA_DIR` and
+`COSMOS_TERM_RUNTIME_DIR` to disposable paths.
+
+## Tests
+
+Every change must pass:
+
+```sh
+cargo test -p cosmos-workspace
+cargo check -p wezterm-gui -p wezterm -p wezterm-mux-server
+git diff --check
 ```
 
-### Please include tests to cover your changes!
+Renderer, app-icon, packaging, or release changes must also exercise the
+relevant matrix in [docs/cosmos-testing.md](docs/cosmos-testing.md).
 
-This will help ensure that your contributions keep working as things change.
+Add unit coverage to `cosmos-workspace` for reusable behavior. Keep directory
+scans, pane resolution, filesystem events, Git, and local status reads off the
+render thread.
 
-You can run the existing tests using:
+## Pull requests
 
-```console
-$ cargo test --all
-```
+Explain:
 
-There are some helper classes for writing tests for terminal behavior.
-Here's an example of a test to verify that the terminal contents
-match expectations:
+- what changed and why
+- the user impact
+- the checks you ran
+- any upstream WezTerm files touched
+- screenshots for visible changes, with private terminal content removed
 
-https://github.com/wez/wezterm/blob/master/term/src/test/mod.rs#L334
-
-Please also make a point of adding comments to your tests to help
-clarify the intent of the test!
-
-### Please also include documentation if you are adding or changing behavior
-
-This helps to keep things well-understood and working in the long term.
-Don't worry if you're not a wordsmith or English isn't your first language as
-I can help with that.  It is more important to capture the intent of the
-feature and having this written out in English also helps when it comes
-to reviewing the code.
-
-## Submitting a Pull Request
-
-After considering all of the above, and once you're prepared your contribution
-and are ready to submit it, you'll need to create a pull request.
-
-If you're new to GitHub pull requests, read through
-https://help.github.com/articles/creating-a-pull-request/ to understand
-how that process works.
-
-### Before your submit your code
-
-Make sure that the tests are working and that the code is correctly
-formatted otherwise the continuous integration system will fail your build:
-
-```console
-$ rustup component add rustfmt-preview          # you only need to do this once
-$ cargo test --all
-$ cargo fmt --all
-```
-
+By contributing, you agree that your changes are distributed under the
+repository's MIT license.

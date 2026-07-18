@@ -864,7 +864,10 @@ pub(crate) fn load_built_in_fonts(font_info: &mut Vec<ParsedFont>) -> anyhow::Re
         #[cfg(any(test, feature = "vendor-noto-emoji"))]
         &[font!("../../assets/fonts/NotoColorEmoji.ttf")],
         #[cfg(any(test, feature = "vendor-nerd-font-symbols"))]
-        &[font!("../../assets/fonts/SymbolsNerdFontMono-Regular.ttf")],
+        &[
+            font!("../../assets/fonts/SymbolsNerdFontMono-Regular.ttf"),
+            font!("../../assets/fonts/VSSeti-Regular.ttf"),
+        ],
     ];
     for bundle in built_ins {
         for (data, name) in bundle.iter() {
@@ -879,6 +882,28 @@ pub(crate) fn load_built_in_fonts(font_info: &mut Vec<ParsedFont>) -> anyhow::Re
             let mut parsed = ParsedFont::from_face(&face, locator)?;
             parsed.is_built_in_fallback = true;
             font_info.push(parsed);
+        }
+    }
+
+    // Chromium's `-apple-system` CSS family resolves through a private
+    // CoreText alias that this older WezTerm locator does not enumerate.
+    // Register the OS-owned font file without bundling or redistributing it so
+    // native workbench chrome can request the same macOS system UI face.
+    #[cfg(target_os = "macos")]
+    {
+        let path = std::path::PathBuf::from("/System/Library/Fonts/SFNS.ttf");
+        if path.is_file() {
+            let locator = FontDataHandle {
+                source: FontDataSource::OnDisk(path),
+                index: 0,
+                variation: 0,
+                origin: FontOrigin::CoreText,
+                coverage: None,
+            };
+            if let Ok(mut parsed) = ParsedFont::from_locator(&locator) {
+                parsed.is_built_in_fallback = false;
+                font_info.push(parsed);
+            }
         }
     }
 

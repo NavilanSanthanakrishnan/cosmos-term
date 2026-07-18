@@ -932,6 +932,100 @@ impl FontConfigInner {
         Ok(loaded)
     }
 
+    /// Resolve a font exclusively from the bundled/direct font database.
+    ///
+    /// This is useful for application chrome that names a font already
+    /// registered in `built_in`. It avoids asking the platform locator to
+    /// enumerate and parse the complete system font catalog for a known local
+    /// face.
+    fn resolve_built_in_font(
+        &self,
+        myself: &Rc<Self>,
+        style: &TextStyle,
+    ) -> anyhow::Result<Rc<LoadedFont>> {
+        let config = self.config.borrow();
+        let is_default = *style == config.font;
+        let def_font = if !is_default && config.use_cap_height_to_scale_fallback_fonts {
+            Some(self.default_font(myself)?)
+        } else {
+            None
+        };
+
+        let mut fonts = self.fonts.borrow_mut();
+        if let Some(entry) = fonts.get(style) {
+            return Ok(Rc::clone(entry));
+        }
+
+        let mut font_size = config.font_size * *self.font_scale.borrow();
+        let dpi = *self.dpi.borrow() as u32;
+        let pixel_size = (font_size * dpi as f64 / 72.0) as u16;
+        let resolve = |pixel_size| -> anyhow::Result<(Box<dyn FontShaper>, Vec<ParsedFont>)> {
+            let attributes = style.font_with_fallback();
+            let mut handles = vec![];
+            let mut loaded = HashSet::new();
+            self.built_in.borrow().resolve_multiple(
+                &attributes,
+                &mut handles,
+                &mut loaded,
+                pixel_size,
+            );
+            if handles.is_empty() {
+                anyhow::bail!("font is not registered in the built-in database");
+            }
+            Ok((new_shaper(&*config, &handles)?, handles))
+        };
+
+        let (mut shaper, mut handles) = resolve(pixel_size)?;
+        let mut metrics = shaper.metrics(font_size, dpi).with_context(|| {
+            format!(
+                "obtaining metrics for built-in font_size={} @ dpi {}",
+                font_size, dpi
+            )
+        })?;
+
+        if let Some(def_font) = def_font {
+            let def_metrics = def_font.metrics();
+            if let (Some(default_cap), Some(current_cap)) =
+                (def_metrics.cap_height, metrics.cap_height)
+            {
+                let scale = default_cap.get() / current_cap.get();
+                if scale != 1.0 {
+                    let scaled_pixel_size = (pixel_size as f64 * scale) as u16;
+                    let scaled_font_size = font_size * scale;
+                    let (alt_shaper, alt_handles) = resolve(scaled_pixel_size)?;
+                    shaper = alt_shaper;
+                    handles = alt_handles;
+                    metrics = shaper.metrics(scaled_font_size, dpi).with_context(|| {
+                        format!(
+                            "obtaining cap-height adjusted built-in metrics for \
+                             font_size={} @ dpi {}",
+                            scaled_font_size, dpi
+                        )
+                    })?;
+                    font_size = scaled_font_size;
+                }
+            }
+        }
+
+        let loaded = Rc::new(LoadedFont {
+            rasterizers: RefCell::new(HashMap::new()),
+            handles: RefCell::new(handles),
+            shaper: RefCell::new(shaper),
+            metrics,
+            font_size,
+            dpi,
+            font_config: Rc::downgrade(myself),
+            pending_fallback: Arc::new(Mutex::new(vec![])),
+            text_style: style.clone(),
+            id: alloc_font_id(),
+            tried_glyphs: RefCell::new(HashSet::new()),
+            pixel_geometry: config.display_pixel_geometry,
+        });
+
+        fonts.insert(style.clone(), Rc::clone(&loaded));
+        Ok(loaded)
+    }
+
     pub fn change_scaling(&self, font_scale: f64, dpi: usize) -> (f64, usize) {
         let prior_font = *self.font_scale.borrow();
         let prior_dpi = *self.dpi.borrow();
@@ -1069,6 +1163,13 @@ impl FontConfiguration {
     /// matches according to the fontconfig pattern.
     pub fn resolve_font(&self, style: &TextStyle) -> anyhow::Result<Rc<LoadedFont>> {
         self.inner.resolve_font(&self.inner, style)
+    }
+
+    /// Resolve a known bundled/direct font without invoking the platform font
+    /// locator. Callers can fall back to `resolve_font` when the requested face
+    /// is not registered locally.
+    pub fn resolve_built_in_font(&self, style: &TextStyle) -> anyhow::Result<Rc<LoadedFont>> {
+        self.inner.resolve_built_in_font(&self.inner, style)
     }
 
     pub fn change_scaling(&self, font_scale: f64, dpi: usize) -> (f64, usize) {
