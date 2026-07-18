@@ -19,6 +19,10 @@ the local Codex session directory and enumerates local process executable names
 to count processes named exactly `codex`. It does not read prompt/response text,
 invoke the Codex CLI, or send that information over the network.
 
+The status bar also reads aggregate CPU tick and virtual-memory counters from
+macOS to display system-wide CPU and RAM capacity. It does not inspect other
+applications' content or launch a monitoring process.
+
 Git decorations run local `git status` commands for the folder displayed in
 the Explorer. tmux pane following may run a local `tmux display-message`
 command against the tmux server to which the Cosmos process was intentionally

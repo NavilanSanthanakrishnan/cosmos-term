@@ -10,9 +10,9 @@ use ::window::{
 use config::keyassignment::{SpawnCommand, SpawnTabDomain};
 use config::{DimensionContext, FontAttributes, FontWeight, TextStyle};
 use cosmos_workspace::{
-    expand_home, CodexStatusSnapshot, DirectoryCache, ExplorerRow, ExplorerRowKind, ExplorerState,
-    FollowMode, GitFileStatus, PaneContext, PaneContextRequest, ServiceResponse, WorkspaceRoot,
-    WorkspaceService, MAX_SIDEBAR_WIDTH, MIN_SIDEBAR_WIDTH,
+    expand_home, DirectoryCache, ExplorerRow, ExplorerRowKind, ExplorerState, FollowMode,
+    GitFileStatus, PaneContext, PaneContextRequest, ServiceResponse, WorkspaceRoot,
+    WorkspaceService, WorkspaceStatusSnapshot, MAX_SIDEBAR_WIDTH, MIN_SIDEBAR_WIDTH,
 };
 use mux::pane::CachePolicy;
 use mux::tab::{SplitDirection, SplitRequest, SplitSize};
@@ -57,7 +57,7 @@ const SERVICE_IDLE_POLL_INTERVAL: Duration = Duration::from_millis(500);
 const CONTEXT_POLL_INTERVAL: Duration = Duration::from_millis(500);
 const DIRECTORY_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 const GIT_STATUS_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
-const CODEX_STATUS_REFRESH_INTERVAL: Duration = Duration::from_secs(2);
+const WORKSPACE_STATUS_REFRESH_INTERVAL: Duration = Duration::from_secs(2);
 
 fn logical_to_physical(value: usize, dpi: usize) -> usize {
     if value == 0 {
@@ -209,12 +209,12 @@ pub struct ExplorerUi {
     git_statuses: HashMap<PathBuf, GitFileStatus>,
     git_status_request_in_flight: bool,
     codex_home: PathBuf,
-    codex_status: CodexStatusSnapshot,
-    codex_status_request_in_flight: bool,
+    workspace_status: WorkspaceStatusSnapshot,
+    workspace_status_request_in_flight: bool,
     last_context_request: Instant,
     last_directory_refresh: Instant,
     last_git_status_refresh: Instant,
-    last_codex_status_refresh: Instant,
+    last_workspace_status_refresh: Instant,
     tick_scheduled: bool,
     last_error: Option<String>,
 }
@@ -271,8 +271,8 @@ impl ExplorerUi {
             git_statuses: HashMap::new(),
             git_status_request_in_flight: false,
             codex_home,
-            codex_status: CodexStatusSnapshot::default(),
-            codex_status_request_in_flight: false,
+            workspace_status: WorkspaceStatusSnapshot::default(),
+            workspace_status_request_in_flight: false,
             last_context_request: Instant::now()
                 .checked_sub(CONTEXT_POLL_INTERVAL)
                 .unwrap_or_else(Instant::now),
@@ -280,8 +280,8 @@ impl ExplorerUi {
             last_git_status_refresh: Instant::now()
                 .checked_sub(GIT_STATUS_REFRESH_INTERVAL)
                 .unwrap_or_else(Instant::now),
-            last_codex_status_refresh: Instant::now()
-                .checked_sub(CODEX_STATUS_REFRESH_INTERVAL)
+            last_workspace_status_refresh: Instant::now()
+                .checked_sub(WORKSPACE_STATUS_REFRESH_INTERVAL)
                 .unwrap_or_else(Instant::now),
             tick_scheduled: false,
             last_error,
@@ -373,12 +373,12 @@ impl ExplorerUi {
         }
     }
 
-    fn request_codex_status(&mut self) {
-        if self.codex_status_request_in_flight {
+    fn request_workspace_status(&mut self) {
+        if self.workspace_status_request_in_flight {
             return;
         }
-        self.codex_status_request_in_flight = true;
-        self.service.codex_status(self.codex_home.clone());
+        self.workspace_status_request_in_flight = true;
+        self.service.workspace_status(self.codex_home.clone());
     }
 
     fn refresh_changed_paths(&mut self, paths: Vec<PathBuf>) {
@@ -686,7 +686,7 @@ impl TermWindow {
         };
         let interval = if self.explorer.context_request_in_flight
             || self.explorer.git_status_request_in_flight
-            || self.explorer.codex_status_request_in_flight
+            || self.explorer.workspace_status_request_in_flight
             || !self.explorer.pending_directories.is_empty()
         {
             SERVICE_POLL_INTERVAL
@@ -740,10 +740,16 @@ impl TermWindow {
                         changed = true;
                     }
                 }
-                ServiceResponse::CodexStatusLoaded(snapshot) => {
-                    self.explorer.codex_status_request_in_flight = false;
-                    if self.explorer.codex_status != snapshot {
-                        self.explorer.codex_status = snapshot;
+                ServiceResponse::WorkspaceStatusLoaded(snapshot) => {
+                    self.explorer.workspace_status_request_in_flight = false;
+                    let visible_status_changed = self.explorer.workspace_status.codex
+                        != snapshot.codex
+                        || self.explorer.workspace_status.system.status_label()
+                            != snapshot.system.status_label();
+                    if self.explorer.workspace_status != snapshot {
+                        self.explorer.workspace_status = snapshot;
+                    }
+                    if visible_status_changed {
                         changed = true;
                     }
                 }
@@ -774,11 +780,11 @@ impl TermWindow {
             self.explorer.last_git_status_refresh = now;
             self.explorer.request_git_status();
         }
-        if now.duration_since(self.explorer.last_codex_status_refresh)
-            >= CODEX_STATUS_REFRESH_INTERVAL
+        if now.duration_since(self.explorer.last_workspace_status_refresh)
+            >= WORKSPACE_STATUS_REFRESH_INTERVAL
         {
-            self.explorer.last_codex_status_refresh = now;
-            self.explorer.request_codex_status();
+            self.explorer.last_workspace_status_refresh = now;
+            self.explorer.request_workspace_status();
         }
         self.schedule_explorer_tick();
         changed
@@ -1607,7 +1613,7 @@ impl TermWindow {
             scale(8) as f32,
             scale(14) as f32,
             height as f32,
-            if self.explorer.codex_status.active_loops > 0 {
+            if self.explorer.workspace_status.codex.active_loops > 0 {
                 STATUS_BAR_LIVE
             } else {
                 MUTED
@@ -1617,7 +1623,7 @@ impl TermWindow {
             STATUS_BAR_FONT_LOGICAL_SIZE,
         )?;
 
-        let usage = truncate_to_width(&self.explorer.codex_status.usage_label(), 42);
+        let usage = truncate_to_width(&self.explorer.workspace_status.codex.usage_label(), 42);
         let usage_left = scale(26);
         let usage_logical_width = (UnicodeWidthStr::width(usage.as_str()) * 7 + 12).clamp(120, 300);
         let usage_width = scale(usage_logical_width).min(width.saturating_sub(usage_left));
@@ -1634,7 +1640,7 @@ impl TermWindow {
             STATUS_BAR_FONT_LOGICAL_SIZE,
         )?;
 
-        let loop_label = match self.explorer.codex_status.active_loops {
+        let loop_label = match self.explorer.workspace_status.codex.active_loops {
             1 => "1 loop".to_string(),
             count => format!("{count} loops"),
         };
@@ -1657,14 +1663,37 @@ impl TermWindow {
             )?;
         }
 
-        if let Some(reset) = self.explorer.codex_status.reset_label(SystemTime::now()) {
+        let mut capacity_right = loops_left + loops_width;
+        if let Some(label) = self.explorer.workspace_status.system.status_label() {
+            let capacity_left = capacity_right + scale(12);
+            let logical_width = (UnicodeWidthStr::width(label.as_str()) * 7 + 12).clamp(100, 210);
+            let capacity_width = scale(logical_width).min(width.saturating_sub(capacity_left));
+            if capacity_width > 0 && capacity_left < width {
+                self.render_explorer_line(
+                    layers,
+                    &label,
+                    top as f32,
+                    capacity_left as f32,
+                    capacity_width as f32,
+                    height as f32,
+                    STATUS_BAR_TEXT,
+                    STATUS_BAR_BG,
+                    false,
+                    STATUS_BAR_FONT_LOGICAL_SIZE,
+                )?;
+                capacity_right = capacity_left + capacity_width;
+            }
+        }
+
+        if let Some(reset) = self
+            .explorer
+            .workspace_status
+            .codex
+            .reset_label(SystemTime::now())
+        {
             let reset_width = scale(120).min(width);
             let reset_left = width.saturating_sub(reset_width + scale(8));
-            if reset_left
-                > loops_left
-                    .saturating_add(loops_width)
-                    .saturating_add(scale(8))
-            {
+            if reset_left > capacity_right.saturating_add(scale(8)) {
                 self.render_explorer_line(
                     layers,
                     &reset,
