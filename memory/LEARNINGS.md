@@ -6,7 +6,13 @@
 - Standalone identity requires changing more than the bundle name: config
   discovery, data/cache/runtime paths, socket and pane environment variables,
   companion executable lookup, window class, log identity, and CLI defaults
-  must all be distinct.
+  must all be distinct. Terminal model constructors are part of that surface:
+  their program identity becomes the initial pane, tab, and native window
+  title before a shell emits its own title.
+- Provide Cosmos-specific data and runtime directory overrides for isolated
+  build tests. They allow a second GUI/CLI process to run without reading or
+  writing the active installation's state or sockets; never repurpose
+  `WEZTERM_*` variables for this.
 - Clear inherited WezTerm protocol/config variables at Cosmos bootstrap. Keep a
   GUI-level `TMUX` value available for pane lookup when Cosmos was launched
   from that server, but strip `TMUX`, `TMUX_PANE`, and `WEZTERM_*` from newly
@@ -78,6 +84,9 @@
   confirmation. Wrap `CloseCurrentTab` in the close-lock verifier and
   pre-close autosave callback when destructive tab closure must require the
   same custom passphrase as `Command+Q`.
+- Personal integrations must be capability-detected rather than public
+  dependencies. Enable protected close only when its credential exists; use
+  normal confirmed close and quit actions on a clean installation.
 - Do not delegate a product-owned password prompt to an AppleScript helper:
   macOS exposes the helper's name in the dialog and notifications. A concealed
   in-app prompt plus in-process PBKDF2 verification keeps the close password
@@ -110,3 +119,7 @@
   later upstream WezTerm.
 - Live tmux testing must use a dedicated socket and explicit `tmux -S` commands.
   Always compare default tmux clients before and after the test.
+- Before publishing a long-lived fork, replace inherited release, scheduled,
+  issue-automation, and Pages workflows with a minimal fork-owned CI surface.
+  Preserve upstream licensing and history, but do not let obsolete upstream
+  automation publish or mutate the fork under the wrong product assumptions.

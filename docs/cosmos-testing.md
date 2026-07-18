@@ -71,16 +71,30 @@ apparent scale.
 Launch or query Cosmos Term with deliberately hostile WezTerm variables:
 
 ```sh
+test_root="$(mktemp -d /tmp/cosmos-config-test.XXXXXX)"
 env \
+  COSMOS_TERM_CLOSE_LOCK_FILE="$test_root/missing-close-lock.json" \
+  COSMOS_TERM_DATA_DIR="$test_root/data" \
+  COSMOS_TERM_RUNTIME_DIR="$test_root/runtime" \
   WEZTERM_CONFIG_FILE=/tmp/must-not-load.lua \
   WEZTERM_UNIX_SOCKET=/tmp/must-not-connect.sock \
-  "dist/Cosmos Term.app/Contents/MacOS/cosmos-term" show-keys
+  "dist/Cosmos Term.app/Contents/MacOS/cosmos-term" \
+  --config-file "$PWD/dist/Cosmos Term.app/Contents/Resources/cosmos.lua" \
+  show-keys
 ```
 
 The command must load the bundled Cosmos config, list `Command+Shift+E` as
-`Nop`, list `Command+W` as a custom event callback, and contain no key
-assignment that hides, locks, or changes Explorer scope. It must not require or
-connect to WezTerm.
+`Nop`, list `Command+W` as a confirmed `CloseCurrentTab`, and contain no key
+assignment that hides, locks, or changes Explorer scope. It must not require
+tmux-manager or connect to WezTerm. The explicit config path ensures an
+existing developer config cannot mask the bundled release config during this
+probe.
+
+Run a second `show-keys` query with the actual protected-close environment, if
+one is configured. In that mode `Command+W` and `Command+Q` must be custom
+event callbacks backed by the concealed in-app prompt. Do not test the success
+path against a live tab: use a temporary PBKDF2 credential, disposable state,
+and a dedicated tmux socket.
 
 When Cosmos is launched from inside an existing WezTerm/tmux pane, inspect the
 new Cosmos shell:
@@ -179,5 +193,7 @@ recorded baseline.
 - Installed WezTerm PID is still running if it was running before the test.
 - Default tmux sessions and clients are unchanged.
 - Cosmos sockets exist only below its runtime directory.
+- The isolated data/runtime override directories contain no sockets belonging
+  to the live installation.
 - No `dist/`, logs, runtime JSON from the home directory, or secrets are
   staged for Git.

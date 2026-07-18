@@ -1,60 +1,95 @@
-# Cosmos Term
+<p align="center">
+  <img src="assets/icon/cosmos-term.png" width="144" alt="Cosmos Term galaxy icon">
+</p>
 
-<img src="assets/icon/cosmos-term.svg" width="112" alt="Cosmos Term icon" align="left">
+<h1 align="center">Cosmos Term</h1>
 
-Cosmos Term is a standalone, native fork of WezTerm with a VS Code-style
-filesystem explorer integrated into the left side of every terminal window.
-It retains WezTerm's terminal engine, tabs, splits, rendering, configuration
-model, and multiplexer support while keeping its application identity and
-runtime state separate from an installed WezTerm.
+<p align="center">
+  A native terminal workbench with a pane-aware, VS Code-style filesystem
+  Explorer—built directly on WezTerm.
+</p>
 
-The current V1 is a macOS application based on WezTerm commit
-`5046fc225992db6ba2ef8812743fadfdfe4b184a`, matching the WezTerm version that
-was installed when this fork was created.
+<p align="center">
+  <a href="https://github.com/NavilanSanthanakrishnan/cosmos-term/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/NavilanSanthanakrishnan/cosmos-term/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="LICENSE.md"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-6f42c1"></a>
+  <img alt="macOS Apple silicon" src="https://img.shields.io/badge/platform-macOS%20Apple%20silicon-111827">
+  <img alt="Rust" src="https://img.shields.io/badge/built%20with-Rust-b7410e">
+  <img alt="Alpha" src="https://img.shields.io/badge/status-alpha-7c3aed">
+</p>
 
-## V1
+![Cosmos Term workbench](docs/screenshots/cosmos-term-workbench.png)
 
-- Native, persistent, resizable explorer beside terminal tabs and splits
-- Code OSS Explorer styling with the reference `#252526` background, 35 px
-  title, 22 px rows, 13/15 px macOS system UI text, exact bundled Seti file
-  icons, native chevrons, selection states, and scrollbar geometry
-- Roomier defaults: a 520 px explorer, 14 pt text, and a 100 × 32 terminal
-  viewport
-- Right-aligned Git decorations for modified, added, deleted, renamed,
-  untracked, and conflicted files, resolved off the render thread
-- Permanent current-folder scope: the focused pane's exact working directory
-  is the only visible root, so saved roots, parents, and siblings never leak
-  into the tree
-- tmux-aware reveal based on the selected tmux pane, including pane changes
-- Lazy directory loading and live non-recursive filesystem watching
-- Expand, collapse, keyboard navigation, and opening a selected directory in a
-  new terminal tab or split
-- Persistent sidebar width, expansion, and hidden-file preference
-- Non-destructive inline errors for inaccessible or invalid paths
-- Logical-pixel rendering that remains the same apparent size on 1× and Retina
-  displays
-- A native 22 px Dark Modern status bar with live Codex usage, next reset, and
-  exact active-loop count
+Cosmos Term is the terminal application itself—not an Electron wrapper and not
+an editor embedding a terminal. It retains WezTerm's GPU renderer, PTYs, tabs,
+splits, Lua configuration, and multiplexer support while adding a permanent
+native Explorer and a small workbench status bar.
 
-Cosmos Term is the terminal application itself—not a wrapper around WezTerm
-and not an editor embedding a terminal.
+> [!IMPORTANT]
+> Cosmos Term is an early macOS release for Apple silicon. The downloadable
+> build is ad-hoc signed but not yet notarized.
 
-## Explorer controls
+## Why Cosmos Term?
 
-The explorer is always visible, and the legacy `Command+Shift+E` chord is
-intentionally inert. The header matches VS Code's compact `EXPLORER` title and
-single ellipsis action. Clicking the ellipsis reveals the active pane's exact
-working directory.
+Terminal work often alternates between the shell and a separate editor just to
+answer simple filesystem questions. Cosmos keeps that context in the terminal
+window without trying to become an editor.
 
-Dotfiles are shown by default to match the reference project view, except for
-repository/runtime metadata such as `.git` and `.DS_Store`.
+| Capability | Behavior |
+| --- | --- |
+| Pane-aware Explorer | Follows the focused native or tmux pane |
+| Exact folder scope | Shows only the active pane's current directory |
+| Code OSS styling | Dark Modern colors, Seti file icons, native tree geometry |
+| Live filesystem | Lazy reads, non-recursive watches, Git decorations |
+| Native terminal core | WezTerm rendering, tabs, splits, config, and mux |
+| Local status | Codex usage/reset and exact active-loop count, without a daemon |
+| Process isolation | Separate app identity, config, state, sockets, and protocol |
 
-Click a row to select and expand/collapse it. Double-click a directory to open
-it in a new tab. Drag the divider to resize the sidebar.
+The Explorer is intentionally always visible. `Command+Shift+E` is consumed so
+it cannot hide the workbench or leak a modified key into the shell.
 
-When the explorer has keyboard focus:
+## Install
 
-| Key | Action |
+### Download the macOS build
+
+1. Download the latest `Cosmos-Term-macos-arm64.zip` from
+   [Releases](https://github.com/NavilanSanthanakrishnan/cosmos-term/releases).
+2. Unzip it and move `Cosmos Term.app` to `/Applications`.
+3. On first launch, Control-click the app and choose **Open**. This is required
+   while release builds are ad-hoc signed rather than Apple-notarized.
+
+Cosmos does not replace or configure WezTerm. Both applications can run at the
+same time.
+
+### Build from source
+
+Prerequisites:
+
+- macOS on Apple silicon
+- Xcode Command Line Tools
+- current stable Rust toolchain
+- Git with submodule support
+
+```sh
+git clone --recurse-submodules \
+  https://github.com/NavilanSanthanakrishnan/cosmos-term.git
+cd cosmos-term
+cargo build --release -p wezterm-gui -p wezterm -p wezterm-mux-server
+ci/package-cosmos-macos.sh
+```
+
+The signed local bundle is written to `dist/Cosmos Term.app`. Quit any older
+Cosmos Term build before replacing the application in `/Applications`.
+
+## Explorer
+
+The active pane's exact working directory is the single visible root. Changing
+directory with `cd` or focusing another split replaces the tree rather than
+leaking parents, siblings, or historical roots.
+
+Click a row to select it. Double-click a directory to open it in a new tab.
+Drag the divider to resize the Explorer.
+
+| Key while Explorer is focused | Action |
 | --- | --- |
 | `↑` / `↓` | Move selection |
 | `←` / `→` | Collapse/parent or expand/child |
@@ -65,87 +100,104 @@ When the explorer has keyboard focus:
 | `.` | Toggle hidden files |
 | `Escape` | Return focus to the terminal |
 
-There is no Explorer hide or lock key binding. In particular, `L`, `F`, and
-`P` remain normal terminal input. Clicking a terminal pane immediately returns
-keyboard focus to the terminal.
+`L`, `F`, and `P` remain normal shell input. Clicking a terminal pane always
+returns keyboard focus to that pane.
 
-`Command+W` asks for the custom close-lock passphrase, saves the workspace,
-then permanently closes the current tab and every process in its panes.
-Canceling or entering the wrong passphrase leaves the tab untouched.
-`Command+Q` applies the same protected autosave flow to the whole application.
-The password prompt is rendered and masked inside Cosmos Term; it no longer
-opens a `tmux Manager` dialog or notification.
+## Status bar
 
-## Codex status
+The thin bottom bar reads structured `token_count` events from the local Codex
+session directory and counts only processes whose executable name is exactly
+`codex`. It does not launch a daemon, helper, `ps`, `pgrep`, or Codex CLI
+process. On systems without Codex data, the status remains unobtrusively
+unavailable.
 
-The thin bottom bar is always visible. It reads Codex rate-limit snapshots
-from the structured `token_count` events in the local Codex session log and
-counts only running executables named exactly `codex`; helpers are excluded.
-The left side shows usage and active loops, while the right side shows the
-next reset.
+## Close behavior
 
-Updates run through the existing native workspace worker. There is no helper
-daemon, launch agent, shell polling loop, or persistent background service.
-The active session file is checked every two seconds, its contents are read
-only when the file changes, and broader session-file discovery is cached.
+A clean install uses the standard confirmed `Command+W` and `Command+Q`
+behavior. Existing protected-close users retain the password-masked autosave
+flow automatically when a close-lock credential exists.
 
-## Isolation from WezTerm
+Optional integration paths:
+
+| Environment variable | Purpose |
+| --- | --- |
+| `COSMOS_TERM_CLOSE_LOCK_FILE` | Explicit close-lock credential |
+| `TMUX_MANAGER_STATE_DIR` | Directory containing `close-lock.json` |
+| `TMUX_MANAGER_BIN` | Autosave executable |
+
+The defaults are `$HOME/.local/state/tmux-manager/close-lock.json` and
+`$HOME/.local/bin/tmux-manager`. Entered passphrases are verified in-process
+and are not logged or placed in command arguments.
+
+## Configuration and isolation
 
 | Concern | Cosmos Term |
 | --- | --- |
-| macOS bundle ID | `com.navilan.cosmos-term` |
-| App | `/Applications/Cosmos Term.app` |
+| Bundle ID | `com.navilan.cosmos-term` |
 | User config | `~/.config/cosmos-term/cosmos.lua` or `~/.cosmos-term.lua` |
-| Bundled fallback config | `Cosmos Term.app/Contents/Resources/cosmos.lua` |
 | Persistent data | `~/Library/Application Support/cosmos-term` |
-| Runtime sockets and logs | `~/Library/Caches/cosmos-term/runtime` |
+| Runtime sockets/logs | `~/Library/Caches/cosmos-term/runtime` |
 | Protocol environment | `COSMOS_TERM_UNIX_SOCKET`, `COSMOS_TERM_PANE` |
-| Config environment | `COSMOS_TERM_CONFIG_FILE`, `COSMOS_TERM_CONFIG_DIR` |
 | Child terminal identity | `TERM_PROGRAM=CosmosTerm` |
 
-Cosmos Term does not read `~/.wezterm.lua`, does not use
-`WEZTERM_UNIX_SOCKET`, and cannot accidentally direct its CLI at a running
-WezTerm GUI. The bundled config initially mirrors the personal WezTerm
-behavior that existed when the fork was created. Parent WezTerm protocol
-variables and stale tmux attachment variables are removed from new Cosmos
-terminal shells.
+`COSMOS_TERM_DATA_DIR` and `COSMOS_TERM_RUNTIME_DIR` can override the data and
+runtime locations for isolated development or testing.
 
-## Build and package on macOS
+Cosmos does not read `~/.wezterm.lua`, use `WEZTERM_UNIX_SOCKET`, or direct its
+CLI to a running WezTerm process. Parent WezTerm protocol variables and stale
+tmux attachment variables are removed from new Cosmos shells.
 
-Prerequisites are the same as the upstream WezTerm macOS build plus a current
-Rust toolchain and Xcode Command Line Tools.
+## Architecture
 
-```sh
-git submodule update --init --recursive
-cargo build --release -p wezterm-gui -p wezterm -p wezterm-mux-server
-ci/package-cosmos-macos.sh
+Cosmos keeps product code close to explicit integration seams:
+
+```text
+cosmos-workspace
+  directory cache · pane context · watchers · Git · Codex status
+          │ non-blocking worker responses
+          ▼
+wezterm-gui/src/termwindow/cosmos.rs
+  Explorer input · native layout · rendering · status bar
+          │ narrow offsets and event routing
+          ▼
+WezTerm terminal core
+  PTY · tabs · splits · mux · GPU renderer · Lua configuration
 ```
 
-The packaging script creates and ad-hoc signs `dist/Cosmos Term.app`. To
-install a local build, quit any running Cosmos Term instance and copy that
-bundle to `/Applications/Cosmos Term.app`.
+Start with:
 
-For development checks:
+- [Architecture](docs/cosmos-architecture.md)
+- [Testing and isolation](docs/cosmos-testing.md)
+- [Changelog](CHANGELOG.md)
+- [Product vision](navilan-terminal-workspace-product-vision.docx)
 
-```sh
-cargo test -p cosmos-workspace
-cargo check -p wezterm-gui -p wezterm -p wezterm-mux-server
-```
+## Project status
 
-See [Cosmos architecture](docs/cosmos-architecture.md) and
-[testing](docs/cosmos-testing.md) for implementation and verification details.
-The original product direction is retained in
-[the product vision](navilan-terminal-workspace-product-vision.docx).
+Current scope is macOS on Apple silicon. Near-term work includes notarized
+release artifacts, automated release packaging, a newer WezTerm baseline, and
+careful expansion of the workbench without turning the Explorer into an editor.
+
+See [issues](https://github.com/NavilanSanthanakrishnan/cosmos-term/issues) and
+[discussions](https://github.com/NavilanSanthanakrishnan/cosmos-term/discussions)
+for active work.
+
+## Contributing
+
+Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) before
+changing the terminal core, native window integration, or tmux behavior.
+Security issues should follow [SECURITY.md](SECURITY.md).
 
 ## Upstream and license
 
-Cosmos Term is derived from [WezTerm](https://github.com/wez/wezterm), created
-by Wez Furlong and contributors. The original copyright, MIT license, bundled
-font licenses, and upstream history are retained. Cosmos-specific work is also
-distributed under the repository's MIT license.
+Cosmos Term is a fork of [WezTerm](https://github.com/wezterm/wezterm), created
+by Wez Furlong and contributors. It currently tracks WezTerm commit
+`5046fc225992db6ba2ef8812743fadfdfe4b184a`. Upstream copyright, MIT licensing,
+font licenses, and Git history are retained.
 
-The explorer's layout metrics, Dark Modern palette, and Seti icon conventions
-are based on the MIT-licensed
-[Microsoft Code - OSS](https://github.com/microsoft/vscode) explorer,
-list/tree, pane-header, default-theme, and Seti-theme sources. Cosmos Term uses
-its own native renderer; it does not bundle or launch VS Code.
+Explorer visual conventions are derived from the MIT-licensed
+[Code - OSS](https://github.com/microsoft/vscode) Explorer, Dark Modern theme,
+and Seti icon theme. Cosmos uses its own native renderer and does not bundle or
+launch VS Code.
+
+Cosmos Term is independent and is not affiliated with or endorsed by WezTerm,
+Wez Furlong, Microsoft, or the Visual Studio Code team.

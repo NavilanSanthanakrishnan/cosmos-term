@@ -1,58 +1,53 @@
-# Privacy Policy for WezTerm
+# Privacy
 
-No data about your device(s) or WezTerm usage leave your device.
+Cosmos Term does not include telemetry, analytics, advertising, or an automatic
+update request. No Cosmos usage data is sent to the project maintainers.
 
-## Data Maintained by WezTerm
+## Local data
 
-WezTerm maintains some historical data, such as recent searches or action
-usage, in some of its overlays such as the debug overlay and character
-selector, in order to make your usage more convenient. It is used only
-by the local process, and care is taken to limit access for the associated
-files on disk to only your local user identity.
+Cosmos stores application state below its own macOS data and cache locations:
 
-WezTerm tracks the output from the commands that you have executed in
-a scrollback buffer.  At the time of writing, that scrollback buffer
-is an in-memory structure that is not visible to other users of the machine.
-In the future, if wezterm expands to offload scrollback information to
-your local disk, it will do so in such a way that other users on the
-same system will not be able to inspect it.
+- `~/Library/Application Support/cosmos-term`
+- `~/Library/Caches/cosmos-term`
 
-## macOS and Data permissions
+This includes Explorer layout/expansion state, runtime sockets, logs, and
+normal terminal convenience state inherited from WezTerm. Terminal scrollback
+is maintained by the running terminal process.
 
-On macOS, when a GUI application that has a "bundle" launches child processes
-(eg: WezTerm, running your shell, and your shell running the programs which you
-direct it to run), any permissioned resource access that may be attempted by
-those child processes will be reported as though WezTerm is attempting to
-access those resources.
+The optional status bar reads only structured Codex `token_count` events from
+the local Codex session directory and enumerates local process executable names
+to count processes named exactly `codex`. It does not read prompt/response text,
+invoke the Codex CLI, or send that information over the network.
 
-The result is that from time to time you may see a dialog about WezTerm
-accessing your Contacts if run a `find` command that happens to step through
-the portion of your filesystem where the contacts are stored.  Or perhaps you
-are running a utility that accesses your camera; it will appear as though
-WezTerm is accessing those resources, but it is not: there is no logic within
-WezTerm to attempt to access your contacts, camera or any other sensitive
-information.
+Git decorations run local `git status` commands for the folder displayed in
+the Explorer. tmux pane following may run a local `tmux display-message`
+command against the tmux server to which the Cosmos process was intentionally
+attached.
 
-## Update Checking
+## Child-process permissions
 
-By default, once every 24 hours, wezterm makes an HTTP request to GitHub's
-release API in order to determine if a newer version is available and to
-notify you if that is the case.
+Cosmos Term launches shells and applications with your macOS user permissions;
+it is not a sandbox. macOS may attribute permission requests from a command you
+run—such as camera, Contacts, Documents, or Downloads access—to Cosmos Term
+because Cosmos is the parent application.
 
-The content of that request is private between your machine and GitHub.  The
-contributors to WezTerm cannot see inside that request and therefore cannot
-infer any information from it.
+## Optional protected close
 
-If you wish, you can disable update checking. See
-https://wezfurlong.org/wezterm/config/lua/config/check_for_updates.html for
-more information on that.
+When a local close-lock credential exists, Cosmos verifies the entered
+passphrase inside the application. The passphrase is not logged or placed in a
+child-process argument. After successful verification, a configured local
+autosave command may run before close.
 
-## Third-Party Builds
+## Network behavior
 
-The above is true of the wezterm source code and the binaries produced by
-wezterm's CI and made available from https://wezfurlong.org/wezterm/ and
-https://github.com/wez/wezterm/.
+Cosmos inherits WezTerm's networking capabilities for commands and features
+that users explicitly configure, such as SSH or remote multiplexer domains.
+The Cosmos-specific Explorer and status bar do not create network requests.
+The upstream automatic updater is disabled because Cosmos releases are not
+WezTerm releases.
 
-If you obtained a pre-built wezterm binary from some other source be aware that
-the person(s) building those versions may have modified them to behave
-differently from the source version.
+## Third-party builds
+
+Anyone can modify open-source software. A binary obtained from a third party
+may behave differently from this repository. Prefer release artifacts
+published by this GitHub repository or build from source.
