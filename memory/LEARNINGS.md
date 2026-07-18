@@ -100,6 +100,13 @@
   similarly named helper processes from making the UI noisy or inaccurate.
   Keep rollout candidates bounded and reuse the macOS process-path buffer
   across PIDs so each two-second count does not allocate once per process.
+- System capacity belongs in the same cached footer request. On macOS,
+  cumulative host CPU ticks and Mach VM statistics provide CPU and meaningful
+  occupied RAM with two native calls per refresh; cache the host port, page
+  size, and total memory, derive CPU from tick deltas, and keep the sample
+  cadence slower than rapidly changing text would repaint the full GPU
+  surface. Do not add a helper, timer, thread, filesystem poll, or broad
+  process scan for these aggregate values.
 - Canvas-drawn explorer focus must be released explicitly when a terminal pane
   is clicked. Native window focus alone does not identify which in-window
   region owns keyboard events; without the handoff, `.` and Return can trigger

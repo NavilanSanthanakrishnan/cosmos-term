@@ -41,7 +41,7 @@ window without trying to become an editor.
 | Code OSS styling | Dark Modern colors, Seti file icons, native tree geometry |
 | Live filesystem | Lazy reads, non-recursive watches, Git decorations |
 | Native terminal core | WezTerm rendering, tabs, splits, config, and mux |
-| Local status | Codex usage/reset and exact active-loop count, without a daemon |
+| Local status | Codex usage, loop count, CPU, and RAM without a daemon |
 | Process isolation | Separate app identity, config, state, sockets, and protocol |
 
 The Explorer is intentionally always visible. `Command+Shift+E` is consumed so
@@ -107,9 +107,12 @@ returns keyboard focus to that pane.
 
 The thin bottom bar reads structured `token_count` events from the local Codex
 session directory and counts only processes whose executable name is exactly
-`codex`. It does not launch a daemon, helper, `ps`, `pgrep`, or Codex CLI
-process. On systems without Codex data, the status remains unobtrusively
-unavailable.
+`codex`. It also shows system-wide CPU load and meaningful occupied RAM
+(`used/total`) from native macOS counters. These values reuse the same worker
+and are sampled as a stable ten-second rolling view: Cosmos does not launch a
+daemon, helper, `top`, `ps`, `pgrep`, or Codex CLI process, and it creates no
+additional status thread. On systems without Codex data, the Codex portion
+remains unobtrusively unavailable while machine capacity continues to update.
 
 ## Close behavior
 

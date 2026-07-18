@@ -13,7 +13,8 @@ git diff --check
 The workspace tests cover legacy follow-state compatibility, root matching and
 deduplication, folder-scoped row isolation, layout migration, Git porcelain
 parsing, directory sorting/filtering, persistence, structured Codex usage
-parsing, reset selection, and exact executable-name process detection.
+parsing, reset selection, exact executable-name process detection, CPU tick
+delta calculation, RAM label formatting, and native macOS capacity reads.
 
 ## Release bundle
 
@@ -47,6 +48,13 @@ installed bundle measured 81.8 MiB current footprint, 237.6 MiB peak, and
 launch measured 56.8 MiB current, 137.1 MiB peak, and 0.54% average idle CPU.
 Treat these as machine-specific reference values: regressions should be judged
 against a matched launch rather than a universal absolute threshold.
+
+The 2026-07-18 capacity-footer build averaged 0.420% idle CPU across 30
+steady-state samples and settled at 87.4 MiB current footprint with a 245.4
+MiB peak. Its same-session pre-feature run measured 80 MiB current and 242 MiB
+peak; launch-to-launch renderer variation is larger than the capacity
+snapshot itself. The final design samples no faster than once per ten seconds
+and skips invalidation when raw page changes do not alter the visible label.
 
 The high-water check must not show hundreds of MiB retained in empty
 `MALLOC_SMALL` regions. A native sample should show the Cosmos worker threads
@@ -151,7 +159,11 @@ Use only panes created in Cosmos Term.
     reset, and active loop count. Start one disposable `codex` executable and
     confirm the count increments within two seconds; stop it and confirm the
     count decrements without restarting Cosmos.
-16. Inspect Cosmos child processes while the footer updates. Confirm there is
+16. Compare the footer's system-wide CPU and occupied/total RAM values with
+    Activity Monitor while idle and under a short disposable load. Confirm the
+    rolling view updates within twelve seconds and remains legible at the
+    minimum window width.
+17. Inspect Cosmos child processes while the footer updates. Confirm there is
     no status helper, shell loop, daemon, or repeated `ps`/`pgrep` process.
     Updating the active rollout should not trigger a full session-tree walk;
     broad discovery is rate-limited to once per 15 seconds.

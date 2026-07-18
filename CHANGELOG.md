@@ -10,6 +10,8 @@ history remains available in `docs/changelog.md` and the retained Git history.
 - Added native-pane and isolated tmux-pane context following.
 - Added lazy directory loading, filesystem watches, and Git decorations.
 - Added the Dark Modern status bar with local Codex usage and loop count.
+- Added lightweight system-wide CPU and RAM capacity to the existing status
+  refresh, using native macOS counters with no helper process or extra thread.
 - Added optional password-protected, autosaved close behavior.
 - Added independent Cosmos configuration, data, runtime, socket, and bundle
   identities so Cosmos Term can run beside WezTerm.

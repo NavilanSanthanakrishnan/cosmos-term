@@ -26,14 +26,15 @@ This crate owns UI-independent workspace behavior:
 - pane-context resolution for native panes and tmux
 - non-blocking Git status snapshots and porcelain parsing
 - read-only Codex usage snapshots and native active-process counting
+- native system-wide CPU and occupied-memory snapshots
 - filesystem change notification
 
 Four independent worker threads serve directory reads, pane-context requests,
 Git status requests, and filesystem watches. Responses return through a single
 non-blocking channel consumed by the window. The render thread never
 recursively scans a workspace, invokes Git, or reads Codex session data. Codex
-status work shares the existing pane-context worker rather than creating a
-fifth thread or helper process.
+and machine-capacity status work share the existing pane-context worker rather
+than creating a fifth thread or helper process.
 
 Only expanded directories are watched, and watches are non-recursive. A
 30-second periodic refresh provides a fallback if a platform watcher misses an
@@ -139,6 +140,19 @@ executable basename of exactly `codex`. Processes such as
 `codex-code-mode-host` are excluded. This design does not spawn `ps`, `pgrep`,
 Codex CLI calls, a daemon, or any persistent status helper.
 
+## System capacity
+
+The existing status request samples cumulative host CPU ticks and Mach VM
+statistics no faster than once every ten seconds. CPU load is derived from
+the delta between samples. RAM usage includes non-purgeable anonymous, wired,
+and compressed pages while excluding reclaimable file cache; total physical
+memory is cached after the first request. The sampling adds two native calls
+to the existing worker cycle and does not add a timer, thread, subprocess,
+daemon, filesystem read, or network request. The restrained cadence also
+avoids repainting the GPU surface just to chase rapidly fluctuating counters.
+Raw page-count changes that do not alter the formatted status label do not
+invalidate the window.
+
 ## Protected close
 
 Protected close is an optional compatibility integration. When a close-lock
@@ -201,7 +215,7 @@ The file contains a layout version, sidebar width, expanded directories,
 hidden-file preference, and legacy roots/follow/visibility fields. The legacy
 fields are retained for state compatibility but cannot hide, lock, or widen
 the runtime scope beyond the active pane directory. Cached listings, Git
-status, Codex status, and pane context are intentionally transient.
+status, Codex/system status, and pane context are intentionally transient.
 
 ## Isolation
 
