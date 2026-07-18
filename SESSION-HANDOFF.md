@@ -5,9 +5,10 @@ Updated: 2026-07-18
 ## Current state
 
 V1 is implemented, packaged, and installed at
-`/Applications/Cosmos Term.app`. Public-launch changes are staged on
-`agent/public-product-launch`; the repository remains private until that
-reviewed branch is merged and the visibility change is confirmed.
+`/Applications/Cosmos Term.app`. The source repository is public at
+`https://github.com/NavilanSanthanakrishnan/cosmos-term`; the product launch
+landed on `main`. Lightweight system-capacity footer work is staged on
+`agent/system-capacity-status` for review before the first public prerelease.
 
 Cosmos Term is a native WezTerm fork, not a wrapper. It retains terminal tabs,
 splits, rendering, Lua configuration, and mux behavior while adding the left
@@ -118,6 +119,18 @@ explorer and using independent application/runtime identities.
   the number of exact `codex` executables. A live test moved the loop count
   from four to five and back to four without an app restart; usage advanced
   from 48% to 49% while the final build remained open.
+- The footer also shows system-wide CPU and meaningful occupied/total RAM,
+  using cumulative host CPU ticks and Mach VM statistics. It reuses the
+  pane-context worker, caches the host port/page size/total RAM, and samples a
+  stable ten-second rolling view. No new timer, worker thread, helper,
+  subprocess, daemon, filesystem poll, or network request was added.
+- Capacity rendering invalidates the window only when the formatted label
+  changes. A first implementation that repainted every two seconds averaged
+  0.663% idle CPU and was rejected; the final isolated build averaged 0.420%
+  across 30 steady-state samples, below the established 0.48% optimized
+  reference. It settled at 87.4 MiB current footprint and 245.4 MiB peak
+  versus the matched pre-feature run's 80 MiB and 242 MiB. Its only direct
+  child was the requested `/bin/zsh -f`.
 - Codex status runs through the existing pane-context worker and native macOS
   process enumeration. It creates no daemon, helper, launch agent, shell
   poller, `ps`, or `pgrep` process. Active-rollout metadata is checked every
@@ -139,7 +152,8 @@ explorer and using independent application/runtime identities.
 - Folder-scoped row generation has unit coverage for excluding both saved
   sibling roots and parent-directory siblings; Git porcelain parsing and
   layout migration are covered as well. Structured Codex usage parsing,
-  nearest-reset selection, and executable-name filtering are also covered.
+  nearest-reset selection, executable-name filtering, CPU tick deltas, compact
+  capacity labels, and live native macOS capacity reads are also covered.
 - The final installed `cosmos-term-gui` SHA-256 is
   `b1f533b3462ab7681efc03a00a7813fb26799f0f7f8ca7fc84e2d38455472369`;
   it exactly matches the packaged release binary.
@@ -149,8 +163,9 @@ explorer and using independent application/runtime identities.
   2486 × 1702 at Retina resolution).
 - The public README screenshot is
   `docs/screenshots/cosmos-term-workbench.png`
-  (`1d52dcb06d1e7b48696bfda1c67aba28a49445d9be81c68f31be75d643aa1f68`,
-  2776 × 1478). It was captured from an isolated packaged process; the
+  (`5f01f7764ecd13d58bff58652029111840aa5d426ccd1236acf6141dee7b5084`,
+  2912 × 1614). It shows the CPU/RAM footer and was captured from an isolated
+  packaged process; the
   installed Cosmos PID and default tmux clients were unchanged before and
   after the capture.
 
@@ -200,8 +215,8 @@ intentional:
 
 ## Remaining release work
 
-- Merge the reviewed public-launch branch, change the GitHub repository to
-  public, and publish the first arm64 prerelease artifact.
+- Merge the reviewed capacity-status branch and publish the first arm64
+  prerelease artifact.
 - The local bundle is ad-hoc signed and is not notarized.
 - Automated release packaging and migration to a newer upstream WezTerm
   baseline remain future work.
