@@ -19,10 +19,10 @@
 
 ![Cosmos Term workbench](docs/screenshots/cosmos-term-workbench.png)
 
-Cosmos Term is the terminal application itself—not an Electron wrapper and not
-an editor embedding a terminal. It retains WezTerm's GPU renderer, PTYs, tabs,
+Cosmos Term is the terminal application itself—not an Electron wrapper or an
+editor embedding a terminal. It retains WezTerm's GPU renderer, PTYs, tabs,
 splits, Lua configuration, and multiplexer support while adding a permanent
-native Explorer and a small workbench status bar.
+native Explorer, an in-window file workspace, and a small status bar.
 
 > [!IMPORTANT]
 > Cosmos Term is an early macOS release for Apple silicon. The downloadable
@@ -31,8 +31,8 @@ native Explorer and a small workbench status bar.
 ## Why Cosmos Term?
 
 Terminal work often alternates between the shell and a separate editor just to
-answer simple filesystem questions. Cosmos keeps that context in the terminal
-window without trying to become an editor.
+inspect or make a small change. Cosmos keeps that context in the terminal
+window while preserving the terminal as the primary workspace.
 
 | Capability | Behavior |
 | --- | --- |
@@ -40,6 +40,7 @@ window without trying to become an editor.
 | Exact folder scope | Shows only the active pane's current directory |
 | Code OSS styling | Dark Modern colors, Seti file icons, native tree geometry |
 | Live filesystem | Lazy reads, non-recursive watches, Git decorations |
+| Native file workspace | Quick Open, formatted Markdown, text editing, safe saves |
 | Native terminal core | WezTerm rendering, tabs, splits, config, and mux |
 | Local status | Codex usage, loop count, CPU, and RAM without a daemon |
 | Process isolation | Separate app identity, config, state, sockets, and protocol |
@@ -86,14 +87,14 @@ The active pane's exact working directory is the single visible root. Changing
 directory with `cd` or focusing another split replaces the tree rather than
 leaking parents, siblings, or historical roots.
 
-Click a row to select it. Double-click a directory to open it in a new tab.
-Drag the divider to resize the Explorer.
+Click a file to open it on the right. Double-click a directory to open it in a
+new terminal tab. Drag the divider to resize the Explorer.
 
 | Key while Explorer is focused | Action |
 | --- | --- |
 | `↑` / `↓` | Move selection |
 | `←` / `→` | Collapse/parent or expand/child |
-| `Return` | Expand or collapse |
+| `Return` | Open a file, or expand/collapse a directory |
 | `Command+Return` | Open directory in a new tab |
 | `Shift+Return` | Open directory in a split |
 | `R` | Reveal the active pane |
@@ -102,6 +103,32 @@ Drag the divider to resize the Explorer.
 
 `L`, `F`, and `P` remain normal shell input. Clicking a terminal pane always
 returns keyboard focus to that pane.
+
+## File workspace
+
+`Command+P` switches the right side from the live terminal to Quick Open.
+Search results are limited and loaded by an on-demand worker, so recursive
+filesystem work never runs in the renderer. Select a result with the mouse or
+arrow keys and press Return.
+
+Markdown opens as a formatted document with headings, lists, quotes, code
+blocks, task markers, rules, and visible link destinations. Other UTF-8 text
+files open in a code-oriented view. The terminal or tmux pane remains alive
+underneath and receives no file-workspace keystrokes.
+
+| File-workspace key | Action |
+| --- | --- |
+| `Command+P` | Open or return to Quick Open |
+| `Command+E` | Toggle preview/edit mode |
+| `Command+S` | Atomically save an edited file |
+| `Escape` | Leave search/edit focus; from preview, return to terminal |
+| `Command+Shift+D` | Discard edits and reload the file from disk |
+
+Clicking `‹ TERMINAL` or any terminal tab also returns immediately to the live
+pane. Text files are capped at 2 MiB; binary and out-of-workspace paths are
+rejected. Saves preserve permissions, use a same-directory atomic rename, and
+refuse to overwrite a file changed externally after it was opened. Unsaved
+edits block `Command+W` and `Command+Q`.
 
 ## Status bar
 
@@ -156,11 +183,11 @@ Cosmos keeps product code close to explicit integration seams:
 
 ```text
 cosmos-workspace
-  directory cache · pane context · watchers · Git · Codex status
+  directory cache · file search/load/save · pane context · watchers · status
           │ non-blocking worker responses
           ▼
 wezterm-gui/src/termwindow/cosmos.rs
-  Explorer input · native layout · rendering · status bar
+  Explorer · file workspace · Markdown/edit input · native rendering
           │ narrow offsets and event routing
           ▼
 WezTerm terminal core

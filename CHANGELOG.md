@@ -3,6 +3,17 @@
 All notable Cosmos-specific changes are documented here. Upstream terminal-core
 history remains available in `docs/changelog.md` and the retained Git history.
 
+## Unreleased
+
+- Added a native right-side file workspace without replacing the live
+  terminal/tmux pane.
+- Added `Command+P` Quick Open and click-to-open Explorer files.
+- Added formatted Markdown preview, UTF-8 text preview, line-numbered editing,
+  native path/mode navigation, and immediate terminal return.
+- Added 2 MiB file limits, workspace-boundary enforcement, atomic saves,
+  permission preservation, external-revision conflict detection, and
+  unsaved-close protection.
+
 ## 0.1.0-alpha.1 — 2026-07-18
 
 - Added a permanent, resizable Code OSS-style filesystem Explorer.

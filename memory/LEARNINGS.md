@@ -130,3 +130,20 @@
   issue-automation, and Pages workflows with a minimal fork-owned CI surface.
   Preserve upstream licensing and history, but do not let obsolete upstream
   automation publish or mutate the fork under the wrong product assumptions.
+- A terminal-integrated file workspace should be presentation state, not a
+  replacement mux pane. Suppress terminal painting and route input while the
+  file surface is visible, but retain the original pane and its processes so
+  returning is immediate and tmux state is never reconstructed.
+- Keep recursive file search, canonicalized load, and atomic save together on
+  an on-demand worker. Canonicalize both root and target, reject paths outside
+  the active root, cap file size and search work, avoid symlink traversal, and
+  compare a load-time revision immediately before rename so an editor cannot
+  silently overwrite external changes.
+- macOS Command chords can arrive as uppercase `KeyCode::Char` values even
+  without an explicit Shift modifier. Native workspace shortcuts should match
+  both cases before allowing unrecognized Command chords to continue through
+  the normal application key map.
+- Cache width-wrapped Markdown display lines independently from parsed
+  document lines. Rebuild the cache only when content or viewport columns
+  change; wrapping prose every paint is avoidable renderer work, while code
+  should remain unwrapped and monospace.

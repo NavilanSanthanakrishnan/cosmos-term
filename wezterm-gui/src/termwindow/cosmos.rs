@@ -7,17 +7,18 @@ use crate::utilsprites::RenderMetrics;
 use ::window::{
     KeyCode, Modifiers, MouseCursor, MouseEvent, MouseEventKind, MousePress, Window, WindowOps,
 };
-use config::keyassignment::{SpawnCommand, SpawnTabDomain};
+use config::keyassignment::{KeyAssignment, SpawnCommand, SpawnTabDomain};
 use config::{DimensionContext, FontAttributes, FontWeight, TextStyle};
 use cosmos_workspace::{
-    expand_home, DirectoryCache, ExplorerRow, ExplorerRowKind, ExplorerState, FollowMode,
-    GitFileStatus, PaneContext, PaneContextRequest, ServiceResponse, WorkspaceRoot,
-    WorkspaceService, WorkspaceStatusSnapshot, MAX_SIDEBAR_WIDTH, MIN_SIDEBAR_WIDTH,
+    expand_home, DirectoryCache, ExplorerRow, ExplorerRowKind, ExplorerState, FileRequest,
+    FileRevision, FollowMode, GitFileStatus, PaneContext, PaneContextRequest, ServiceResponse,
+    WorkspaceRoot, WorkspaceService, WorkspaceStatusSnapshot, MAX_SIDEBAR_WIDTH, MIN_SIDEBAR_WIDTH,
 };
 use mux::pane::CachePolicy;
 use mux::tab::{SplitDirection, SplitRequest, SplitSize};
 use mux::Mux;
 use ordered_float::NotNan;
+use pulldown_cmark::{Event as MarkdownEvent, Options as MarkdownOptions, Parser, Tag};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
@@ -47,6 +48,12 @@ const EXPLORER_HEADER_FONT_LOGICAL_SIZE: f64 = 13.0;
 const EXPLORER_BODY_FONT_LOGICAL_SIZE: f64 = 15.0;
 const EXPLORER_ICON_FONT_LOGICAL_SIZE: f64 = 16.0;
 const STATUS_BAR_FONT_LOGICAL_SIZE: f64 = 12.0;
+const FILE_HEADER_HEIGHT: usize = 38;
+const FILE_SEARCH_HEIGHT: usize = 38;
+const FILE_ROW_HEIGHT: usize = 24;
+const FILE_CONTENT_PADDING: usize = 24;
+const FILE_BODY_FONT_LOGICAL_SIZE: f64 = 15.0;
+const FILE_CODE_FONT_LOGICAL_SIZE: f64 = 14.0;
 #[cfg(target_os = "macos")]
 const EXPLORER_UI_FONT_FAMILY: &str = "System Font";
 #[cfg(not(target_os = "macos"))]
@@ -86,6 +93,13 @@ const STATUS_BAR_BG: RgbColor = RgbColor::new_8bpc(24, 24, 24);
 const STATUS_BAR_BORDER: RgbColor = RgbColor::new_8bpc(43, 43, 43);
 const STATUS_BAR_TEXT: RgbColor = RgbColor::new_8bpc(204, 204, 204);
 const STATUS_BAR_LIVE: RgbColor = RgbColor::new_8bpc(137, 209, 133);
+const FILE_BG: RgbColor = RgbColor::new_8bpc(30, 30, 30);
+const FILE_HEADER_BG: RgbColor = RgbColor::new_8bpc(24, 24, 24);
+const FILE_INPUT_BG: RgbColor = RgbColor::new_8bpc(49, 50, 51);
+const FILE_BORDER: RgbColor = RgbColor::new_8bpc(63, 63, 70);
+const FILE_ACCENT: RgbColor = RgbColor::new_8bpc(0, 122, 204);
+const FILE_LINK: RgbColor = RgbColor::new_8bpc(78, 148, 206);
+const FILE_CODE_BG: RgbColor = RgbColor::new_8bpc(37, 37, 38);
 
 const CHEVRON_RIGHT: &[Poly] = &[Poly {
     path: &[
@@ -182,10 +196,198 @@ pub enum ExplorerUiItem {
     Row(usize),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FileWorkspaceUiItem {
+    Surface,
+    TerminalTab,
+    SearchBox,
+    SearchResult(usize),
+    EditToggle,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExplorerPromptKind {
     AddRoot,
     RenameRoot(usize),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FileWorkspaceMode {
+    Terminal,
+    Search,
+    View,
+    Edit,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DocumentLineKind {
+    Body,
+    Heading(u8),
+    Code,
+    Quote,
+    List,
+    Rule,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DocumentLine {
+    text: String,
+    kind: DocumentLineKind,
+}
+
+#[derive(Debug)]
+struct FileWorkspaceUi {
+    mode: FileWorkspaceMode,
+    active_path: Option<PathBuf>,
+    content: String,
+    document_lines: Vec<DocumentLine>,
+    wrapped_document_lines: Vec<DocumentLine>,
+    wrap_columns: usize,
+    dirty: bool,
+    revision: Option<FileRevision>,
+    cursor: usize,
+    scroll: usize,
+    query: String,
+    results: Vec<PathBuf>,
+    selected_result: usize,
+    request_id: u64,
+    pending_request: Option<u64>,
+    search_truncated: bool,
+    error: Option<String>,
+}
+
+impl Default for FileWorkspaceUi {
+    fn default() -> Self {
+        Self {
+            mode: FileWorkspaceMode::Terminal,
+            active_path: None,
+            content: String::new(),
+            document_lines: vec![],
+            wrapped_document_lines: vec![],
+            wrap_columns: 0,
+            dirty: false,
+            revision: None,
+            cursor: 0,
+            scroll: 0,
+            query: String::new(),
+            results: vec![],
+            selected_result: 0,
+            request_id: 0,
+            pending_request: None,
+            search_truncated: false,
+            error: None,
+        }
+    }
+}
+
+impl FileWorkspaceUi {
+    fn visible(&self) -> bool {
+        self.mode != FileWorkspaceMode::Terminal
+    }
+
+    fn next_request_id(&mut self) -> u64 {
+        self.request_id = self.request_id.wrapping_add(1).max(1);
+        self.pending_request = Some(self.request_id);
+        self.request_id
+    }
+
+    fn is_markdown(&self) -> bool {
+        self.active_path
+            .as_deref()
+            .and_then(Path::extension)
+            .map(|extension| {
+                matches!(
+                    extension.to_string_lossy().to_ascii_lowercase().as_str(),
+                    "md" | "mdx" | "markdown"
+                )
+            })
+            .unwrap_or(false)
+    }
+
+    fn rebuild_document(&mut self) {
+        self.document_lines = if self.is_markdown() {
+            markdown_document_lines(&self.content)
+        } else {
+            self.content
+                .lines()
+                .map(|line| DocumentLine {
+                    text: line.to_string(),
+                    kind: DocumentLineKind::Code,
+                })
+                .collect()
+        };
+        if self.document_lines.is_empty() {
+            self.document_lines.push(DocumentLine {
+                text: String::new(),
+                kind: if self.is_markdown() {
+                    DocumentLineKind::Body
+                } else {
+                    DocumentLineKind::Code
+                },
+            });
+        }
+        self.wrapped_document_lines.clear();
+        self.wrap_columns = 0;
+    }
+
+    fn ensure_wrapped_document(&mut self, columns: usize) {
+        let columns = columns.max(24);
+        if self.wrap_columns == columns && !self.wrapped_document_lines.is_empty() {
+            return;
+        }
+        self.wrap_columns = columns;
+        self.wrapped_document_lines.clear();
+        for line in &self.document_lines {
+            if line.text.is_empty()
+                || matches!(line.kind, DocumentLineKind::Code | DocumentLineKind::Rule)
+            {
+                self.wrapped_document_lines.push(line.clone());
+                continue;
+            }
+            let width = match line.kind {
+                DocumentLineKind::List | DocumentLineKind::Quote => columns.saturating_sub(4),
+                _ => columns,
+            }
+            .max(16);
+            let wrapped = textwrap::wrap(&line.text, width);
+            if wrapped.is_empty() {
+                self.wrapped_document_lines.push(line.clone());
+            } else {
+                self.wrapped_document_lines
+                    .extend(wrapped.into_iter().map(|text| DocumentLine {
+                        text: text.into_owned(),
+                        kind: line.kind,
+                    }));
+            }
+        }
+    }
+
+    fn trace_test_state(&self, event: &str) {
+        let path = match std::env::var_os("COSMOS_TERM_FILE_WORKSPACE_TRACE") {
+            Some(path) => PathBuf::from(path),
+            None => return,
+        };
+        let mode = match self.mode {
+            FileWorkspaceMode::Terminal => "terminal",
+            FileWorkspaceMode::Search => "search",
+            FileWorkspaceMode::View => "view",
+            FileWorkspaceMode::Edit => "edit",
+        };
+        let snapshot = serde_json::json!({
+            "event": event,
+            "mode": mode,
+            "path": self.active_path,
+            "content_bytes": self.content.len(),
+            "document_lines": self.document_lines.len(),
+            "results": self.results.len(),
+            "dirty": self.dirty,
+            "pending": self.pending_request,
+            "error": self.error,
+        });
+        if let Ok(data) = serde_json::to_vec_pretty(&snapshot) {
+            let _ = std::fs::write(path, data);
+        }
+    }
 }
 
 pub struct ExplorerUi {
@@ -217,6 +419,7 @@ pub struct ExplorerUi {
     last_workspace_status_refresh: Instant,
     tick_scheduled: bool,
     last_error: Option<String>,
+    file_workspace: FileWorkspaceUi,
 }
 
 impl ExplorerUi {
@@ -285,6 +488,7 @@ impl ExplorerUi {
                 .unwrap_or_else(Instant::now),
             tick_scheduled: false,
             last_error,
+            file_workspace: FileWorkspaceUi::default(),
         }
     }
 
@@ -642,6 +846,185 @@ impl ExplorerUi {
     }
 }
 
+fn markdown_document_lines(markdown: &str) -> Vec<DocumentLine> {
+    let parser = Parser::new_ext(markdown, MarkdownOptions::all());
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    let mut kind = DocumentLineKind::Body;
+    let mut list_depth = 0usize;
+    let mut link_destination: Option<String> = None;
+
+    let flush = |lines: &mut Vec<DocumentLine>, current: &mut String, kind: DocumentLineKind| {
+        if !current.is_empty() || matches!(kind, DocumentLineKind::Rule) {
+            lines.push(DocumentLine {
+                text: std::mem::take(current),
+                kind,
+            });
+        }
+    };
+
+    for event in parser {
+        match event {
+            MarkdownEvent::Start(Tag::Heading(level, _, _)) => {
+                flush(&mut lines, &mut current, kind);
+                kind = DocumentLineKind::Heading(level as u8);
+            }
+            MarkdownEvent::End(Tag::Heading(_, _, _)) => {
+                flush(&mut lines, &mut current, kind);
+                kind = DocumentLineKind::Body;
+            }
+            MarkdownEvent::Start(Tag::CodeBlock(_)) => {
+                flush(&mut lines, &mut current, kind);
+                kind = DocumentLineKind::Code;
+            }
+            MarkdownEvent::End(Tag::CodeBlock(_)) => {
+                flush(&mut lines, &mut current, kind);
+                kind = DocumentLineKind::Body;
+            }
+            MarkdownEvent::Start(Tag::BlockQuote) => {
+                flush(&mut lines, &mut current, kind);
+                kind = DocumentLineKind::Quote;
+                current.push_str("│ ");
+            }
+            MarkdownEvent::End(Tag::BlockQuote) => {
+                flush(&mut lines, &mut current, kind);
+                kind = DocumentLineKind::Body;
+            }
+            MarkdownEvent::Start(Tag::List(_)) => list_depth += 1,
+            MarkdownEvent::End(Tag::List(_)) => list_depth = list_depth.saturating_sub(1),
+            MarkdownEvent::Start(Tag::Item) => {
+                flush(&mut lines, &mut current, kind);
+                kind = DocumentLineKind::List;
+                current.push_str(&"  ".repeat(list_depth.saturating_sub(1)));
+                current.push_str("• ");
+            }
+            MarkdownEvent::End(Tag::Item) => {
+                flush(&mut lines, &mut current, kind);
+                kind = DocumentLineKind::Body;
+            }
+            MarkdownEvent::Start(Tag::Link(_, destination, _)) => {
+                link_destination = Some(destination.to_string());
+            }
+            MarkdownEvent::End(Tag::Link(_, _, _)) => {
+                if let Some(destination) = link_destination.take() {
+                    current.push_str("  ‹");
+                    current.push_str(&destination);
+                    current.push('›');
+                }
+            }
+            MarkdownEvent::Text(text) => current.push_str(&text),
+            MarkdownEvent::Code(code) => {
+                current.push('`');
+                current.push_str(&code);
+                current.push('`');
+            }
+            MarkdownEvent::SoftBreak | MarkdownEvent::HardBreak => {
+                flush(&mut lines, &mut current, kind);
+                if kind == DocumentLineKind::Quote {
+                    current.push_str("│ ");
+                }
+            }
+            MarkdownEvent::End(Tag::Paragraph) => {
+                flush(&mut lines, &mut current, kind);
+                if !matches!(kind, DocumentLineKind::List | DocumentLineKind::Quote) {
+                    lines.push(DocumentLine {
+                        text: String::new(),
+                        kind: DocumentLineKind::Body,
+                    });
+                }
+                kind = DocumentLineKind::Body;
+            }
+            MarkdownEvent::Rule => {
+                flush(&mut lines, &mut current, kind);
+                lines.push(DocumentLine {
+                    text: "────────────────────────────────────────".to_string(),
+                    kind: DocumentLineKind::Rule,
+                });
+            }
+            MarkdownEvent::TaskListMarker(checked) => {
+                current.push_str(if checked { "☑ " } else { "☐ " });
+            }
+            MarkdownEvent::Html(html) => current.push_str(&html),
+            MarkdownEvent::FootnoteReference(reference) => {
+                current.push('[');
+                current.push_str(&reference);
+                current.push(']');
+            }
+            _ => {}
+        }
+    }
+    flush(&mut lines, &mut current, kind);
+    while lines
+        .last()
+        .map(|line| line.text.is_empty())
+        .unwrap_or(false)
+    {
+        lines.pop();
+    }
+    lines
+}
+
+fn previous_char_boundary(text: &str, cursor: usize) -> usize {
+    text[..cursor.min(text.len())]
+        .char_indices()
+        .last()
+        .map(|(index, _)| index)
+        .unwrap_or(0)
+}
+
+fn next_char_boundary(text: &str, cursor: usize) -> usize {
+    if cursor >= text.len() {
+        return text.len();
+    }
+    cursor
+        + text[cursor..]
+            .chars()
+            .next()
+            .map(char::len_utf8)
+            .unwrap_or(0)
+}
+
+fn move_cursor_vertical(text: &str, cursor: usize, delta: isize) -> usize {
+    let cursor = cursor.min(text.len());
+    let line_start = text[..cursor]
+        .rfind('\n')
+        .map(|index| index + 1)
+        .unwrap_or(0);
+    let column = text[line_start..cursor].chars().count();
+    if delta < 0 {
+        if line_start == 0 {
+            return cursor;
+        }
+        let previous_end = line_start - 1;
+        let previous_start = text[..previous_end]
+            .rfind('\n')
+            .map(|index| index + 1)
+            .unwrap_or(0);
+        return text[previous_start..previous_end]
+            .char_indices()
+            .nth(column)
+            .map(|(offset, _)| previous_start + offset)
+            .unwrap_or(previous_end);
+    }
+    let line_end = text[cursor..]
+        .find('\n')
+        .map(|offset| cursor + offset)
+        .unwrap_or(text.len());
+    if line_end == text.len() {
+        return cursor;
+    }
+    let next_start = line_end + 1;
+    let next_end = text[next_start..]
+        .find('\n')
+        .map(|offset| next_start + offset)
+        .unwrap_or(text.len());
+    text[next_start..next_end]
+        .char_indices()
+        .nth(column)
+        .map(|(offset, _)| next_start + offset)
+        .unwrap_or(next_end)
+}
+
 fn truncate_to_width(text: &str, max_width: usize) -> String {
     if UnicodeWidthStr::width(text) <= max_width {
         return text.to_string();
@@ -687,6 +1070,7 @@ impl TermWindow {
         let interval = if self.explorer.context_request_in_flight
             || self.explorer.git_status_request_in_flight
             || self.explorer.workspace_status_request_in_flight
+            || self.explorer.file_workspace.pending_request.is_some()
             || !self.explorer.pending_directories.is_empty()
         {
             SERVICE_POLL_INTERVAL
@@ -750,6 +1134,69 @@ impl TermWindow {
                         self.explorer.workspace_status = snapshot;
                     }
                     if visible_status_changed {
+                        changed = true;
+                    }
+                }
+                ServiceResponse::FileSearchCompleted(result) => {
+                    if self.explorer.file_workspace.pending_request == Some(result.request_id)
+                        && self.explorer.file_workspace.mode == FileWorkspaceMode::Search
+                    {
+                        self.explorer.file_workspace.pending_request = None;
+                        self.explorer.file_workspace.results = result.paths;
+                        self.explorer.file_workspace.selected_result = self
+                            .explorer
+                            .file_workspace
+                            .selected_result
+                            .min(self.explorer.file_workspace.results.len().saturating_sub(1));
+                        self.explorer.file_workspace.search_truncated = result.truncated;
+                        self.explorer.file_workspace.error = result.error;
+                        log::debug!(
+                            "cosmos file workspace: search request {} returned {} files",
+                            result.request_id,
+                            self.explorer.file_workspace.results.len()
+                        );
+                        self.explorer
+                            .file_workspace
+                            .trace_test_state("search_completed");
+                        changed = true;
+                    }
+                }
+                ServiceResponse::FileLoaded(result) => {
+                    if self.explorer.file_workspace.pending_request == Some(result.request_id)
+                        && self.explorer.file_workspace.active_path.as_ref() == Some(&result.path)
+                    {
+                        self.explorer.file_workspace.pending_request = None;
+                        self.explorer.file_workspace.error = result.error;
+                        if let Some(content) = result.content {
+                            log::debug!(
+                                "cosmos file workspace: loaded {} bytes from {}",
+                                content.len(),
+                                result.path.display()
+                            );
+                            self.explorer.file_workspace.content = content;
+                            self.explorer.file_workspace.revision = result.revision;
+                            self.explorer.file_workspace.cursor = 0;
+                            self.explorer.file_workspace.scroll = 0;
+                            self.explorer.file_workspace.dirty = false;
+                            self.explorer.file_workspace.rebuild_document();
+                        }
+                        self.explorer.file_workspace.trace_test_state("file_loaded");
+                        changed = true;
+                    }
+                }
+                ServiceResponse::FileSaved(result) => {
+                    if self.explorer.file_workspace.pending_request == Some(result.request_id)
+                        && self.explorer.file_workspace.active_path.as_ref() == Some(&result.path)
+                    {
+                        self.explorer.file_workspace.pending_request = None;
+                        self.explorer.file_workspace.error = result.error;
+                        if self.explorer.file_workspace.error.is_none() {
+                            log::debug!("cosmos file workspace: saved {}", result.path.display());
+                            self.explorer.file_workspace.revision = result.revision;
+                            self.explorer.file_workspace.dirty = false;
+                            self.explorer.file_workspace.rebuild_document();
+                        }
+                        self.explorer.file_workspace.trace_test_state("file_saved");
                         changed = true;
                     }
                 }
@@ -1030,6 +1477,444 @@ impl TermWindow {
         }
     }
 
+    pub fn file_workspace_visible(&self) -> bool {
+        self.explorer.file_workspace.visible()
+    }
+
+    pub fn block_dirty_file_workspace_close(&mut self, assignment: &KeyAssignment) -> bool {
+        if !self.explorer.file_workspace.dirty
+            || !matches!(
+                assignment,
+                KeyAssignment::CloseCurrentPane { .. }
+                    | KeyAssignment::CloseCurrentTab { .. }
+                    | KeyAssignment::QuitApplication
+            )
+        {
+            return false;
+        }
+        self.explorer.file_workspace.error = Some(
+            "Unsaved changes blocked closing. Press Command+S to save or Command+Shift+D to discard."
+                .to_string(),
+        );
+        self.explorer
+            .file_workspace
+            .trace_test_state("dirty_close_blocked");
+        if let Some(window) = self.window.as_ref() {
+            window.invalidate();
+        }
+        true
+    }
+
+    pub fn block_dirty_file_workspace_window_close(&mut self) -> bool {
+        if !self.explorer.file_workspace.dirty {
+            return false;
+        }
+        self.explorer.file_workspace.error = Some(
+            "Unsaved changes blocked closing. Press Command+S to save or Command+Shift+D to discard."
+                .to_string(),
+        );
+        self.explorer
+            .file_workspace
+            .trace_test_state("dirty_close_blocked");
+        if let Some(window) = self.window.as_ref() {
+            window.invalidate();
+        }
+        true
+    }
+
+    pub fn file_workspace_window_title(&self) -> Option<String> {
+        match self.explorer.file_workspace.mode {
+            FileWorkspaceMode::Terminal => None,
+            FileWorkspaceMode::Search => Some("Quick Open — Cosmos Term".to_string()),
+            FileWorkspaceMode::View | FileWorkspaceMode::Edit => {
+                let name = self
+                    .explorer
+                    .file_workspace
+                    .active_path
+                    .as_deref()
+                    .and_then(Path::file_name)
+                    .map(|name| name.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "File".to_string());
+                let mode = if self.explorer.file_workspace.mode == FileWorkspaceMode::Edit {
+                    "Edit"
+                } else {
+                    "Preview"
+                };
+                Some(format!("{name} — {mode} — Cosmos Term"))
+            }
+        }
+    }
+
+    pub(super) fn active_workspace_root(&self) -> Option<PathBuf> {
+        self.explorer
+            .display_root
+            .as_ref()
+            .map(|root| root.path.clone())
+    }
+
+    pub fn show_file_search(&mut self) {
+        let root = match self.active_workspace_root() {
+            Some(root) => root,
+            None => {
+                self.explorer.file_workspace.error =
+                    Some("Waiting for the active pane directory…".to_string());
+                self.explorer.file_workspace.mode = FileWorkspaceMode::Search;
+                return;
+            }
+        };
+        let request_id = self.explorer.file_workspace.next_request_id();
+        log::debug!(
+            "cosmos file workspace: quick open request {} for {}",
+            request_id,
+            root.display()
+        );
+        self.explorer.file_workspace.mode = FileWorkspaceMode::Search;
+        self.explorer.file_workspace.query.clear();
+        self.explorer.file_workspace.results.clear();
+        self.explorer.file_workspace.selected_result = 0;
+        self.explorer.file_workspace.search_truncated = false;
+        self.explorer.file_workspace.error = None;
+        self.explorer.service.file_request(FileRequest::Search {
+            request_id,
+            root,
+            query: String::new(),
+        });
+        self.explorer
+            .file_workspace
+            .trace_test_state("search_requested");
+        self.update_title();
+        self.schedule_explorer_tick();
+    }
+
+    fn refresh_file_search(&mut self) {
+        let root = match self.active_workspace_root() {
+            Some(root) => root,
+            None => return,
+        };
+        let request_id = self.explorer.file_workspace.next_request_id();
+        let query = self.explorer.file_workspace.query.clone();
+        self.explorer.file_workspace.error = None;
+        self.explorer.service.file_request(FileRequest::Search {
+            request_id,
+            root,
+            query,
+        });
+        self.schedule_explorer_tick();
+    }
+
+    pub fn open_file_workspace_path(&mut self, path: PathBuf) {
+        if self.explorer.file_workspace.dirty
+            && self.explorer.file_workspace.active_path.as_ref() != Some(&path)
+        {
+            self.explorer.file_workspace.mode = FileWorkspaceMode::View;
+            self.explorer.file_workspace.error = Some(
+                "Unsaved changes are still open. Press Command+S before opening another file."
+                    .to_string(),
+            );
+            return;
+        }
+        let root = match self.active_workspace_root() {
+            Some(root) => root,
+            None => return,
+        };
+        let request_id = self.explorer.file_workspace.next_request_id();
+        log::debug!(
+            "cosmos file workspace: loading request {} for {}",
+            request_id,
+            path.display()
+        );
+        self.explorer.file_workspace.mode = FileWorkspaceMode::View;
+        self.explorer.file_workspace.active_path = Some(path.clone());
+        self.explorer.file_workspace.content.clear();
+        self.explorer.file_workspace.document_lines.clear();
+        self.explorer.file_workspace.wrapped_document_lines.clear();
+        self.explorer.file_workspace.wrap_columns = 0;
+        self.explorer.file_workspace.cursor = 0;
+        self.explorer.file_workspace.scroll = 0;
+        self.explorer.file_workspace.dirty = false;
+        self.explorer.file_workspace.revision = None;
+        self.explorer.file_workspace.error = None;
+        self.explorer.service.file_request(FileRequest::Load {
+            request_id,
+            root,
+            path,
+        });
+        self.explorer
+            .file_workspace
+            .trace_test_state("load_requested");
+        self.update_title();
+        self.schedule_explorer_tick();
+    }
+
+    fn save_file_workspace(&mut self) {
+        if !self.explorer.file_workspace.dirty {
+            return;
+        }
+        let root = match self.active_workspace_root() {
+            Some(root) => root,
+            None => return,
+        };
+        let path = match self.explorer.file_workspace.active_path.clone() {
+            Some(path) => path,
+            None => return,
+        };
+        let content = self.explorer.file_workspace.content.clone();
+        let expected_revision = self.explorer.file_workspace.revision;
+        let request_id = self.explorer.file_workspace.next_request_id();
+        log::debug!(
+            "cosmos file workspace: saving request {} for {}",
+            request_id,
+            path.display()
+        );
+        self.explorer.file_workspace.error = None;
+        self.explorer.service.file_request(FileRequest::Save {
+            request_id,
+            root,
+            path,
+            content,
+            expected_revision,
+        });
+        self.explorer
+            .file_workspace
+            .trace_test_state("save_requested");
+        self.schedule_explorer_tick();
+    }
+
+    pub fn return_to_terminal_workspace(&mut self) {
+        self.explorer.file_workspace.mode = FileWorkspaceMode::Terminal;
+        log::debug!("cosmos file workspace: returned to terminal");
+        self.explorer.file_workspace.error = None;
+        self.explorer
+            .file_workspace
+            .trace_test_state("terminal_restored");
+        self.update_title();
+        if let Some(window) = self.window.as_ref() {
+            window.invalidate();
+        }
+    }
+
+    fn open_selected_search_result(&mut self) {
+        let path = self
+            .explorer
+            .file_workspace
+            .results
+            .get(self.explorer.file_workspace.selected_result)
+            .cloned();
+        if let Some(path) = path {
+            self.open_file_workspace_path(path);
+        }
+    }
+
+    pub fn file_workspace_key_down(&mut self, key: &KeyCode, modifiers: Modifiers) -> bool {
+        let modifiers = modifiers.remove_positional_mods();
+        if matches!(
+            (key, modifiers),
+            (KeyCode::Char('p' | 'P'), Modifiers::SUPER)
+        ) {
+            self.show_file_search();
+            return true;
+        }
+        if !self.explorer.file_workspace.visible() {
+            return false;
+        }
+
+        if matches!(
+            (key, modifiers),
+            (KeyCode::Char('s' | 'S'), Modifiers::SUPER)
+        ) {
+            self.save_file_workspace();
+            return true;
+        }
+        if matches!(
+            (key, modifiers),
+            (KeyCode::Char('e' | 'E'), Modifiers::SUPER)
+        ) {
+            match self.explorer.file_workspace.mode {
+                FileWorkspaceMode::View => {
+                    self.explorer.file_workspace.mode = FileWorkspaceMode::Edit;
+                    self.explorer.file_workspace.cursor =
+                        self.explorer.file_workspace.content.len();
+                }
+                FileWorkspaceMode::Edit => {
+                    self.explorer.file_workspace.mode = FileWorkspaceMode::View;
+                    self.explorer.file_workspace.rebuild_document();
+                }
+                _ => {}
+            }
+            self.explorer
+                .file_workspace
+                .trace_test_state("mode_changed");
+            self.update_title();
+            return true;
+        }
+        if self.explorer.file_workspace.dirty
+            && matches!(
+                (key, modifiers),
+                (KeyCode::Char('w' | 'W' | 'q' | 'Q'), Modifiers::SUPER)
+            )
+        {
+            self.explorer.file_workspace.error = Some(
+                "Unsaved changes blocked closing. Press Command+S to save or Command+Shift+D to discard."
+                    .to_string(),
+            );
+            self.explorer
+                .file_workspace
+                .trace_test_state("dirty_close_blocked");
+            return true;
+        }
+        if matches!(
+            (key, modifiers),
+            (KeyCode::Char('d' | 'D'), mods) if mods == (Modifiers::SUPER | Modifiers::SHIFT)
+        ) {
+            self.explorer.file_workspace.dirty = false;
+            if let Some(path) = self.explorer.file_workspace.active_path.clone() {
+                self.open_file_workspace_path(path);
+            } else {
+                self.return_to_terminal_workspace();
+            }
+            return true;
+        }
+        // Preserve application/window/tab shortcuts such as protected
+        // Command+W and Command+Q. File-workspace commands above are consumed;
+        // all other Command chords continue through the normal input map.
+        if modifiers.contains(Modifiers::SUPER) {
+            return false;
+        }
+
+        match self.explorer.file_workspace.mode {
+            FileWorkspaceMode::Search => {
+                match (key, modifiers) {
+                    (KeyCode::UpArrow, Modifiers::NONE) => {
+                        self.explorer.file_workspace.selected_result = self
+                            .explorer
+                            .file_workspace
+                            .selected_result
+                            .saturating_sub(1);
+                    }
+                    (KeyCode::DownArrow, Modifiers::NONE) => {
+                        let last = self.explorer.file_workspace.results.len().saturating_sub(1);
+                        self.explorer.file_workspace.selected_result =
+                            (self.explorer.file_workspace.selected_result + 1).min(last);
+                    }
+                    (KeyCode::Char('\r'), Modifiers::NONE) => {
+                        self.open_selected_search_result();
+                    }
+                    (KeyCode::Char('\u{1b}'), Modifiers::NONE) => {
+                        self.explorer.file_workspace.mode =
+                            if self.explorer.file_workspace.active_path.is_some() {
+                                FileWorkspaceMode::View
+                            } else {
+                                FileWorkspaceMode::Terminal
+                            };
+                        self.update_title();
+                    }
+                    (KeyCode::Char('\u{8}' | '\u{7f}'), Modifiers::NONE) => {
+                        self.explorer.file_workspace.query.pop();
+                        self.explorer.file_workspace.selected_result = 0;
+                        self.refresh_file_search();
+                    }
+                    (KeyCode::Char(character), mods)
+                        if mods == Modifiers::NONE || mods == Modifiers::SHIFT =>
+                    {
+                        if !character.is_control() {
+                            self.explorer.file_workspace.query.push(*character);
+                            self.explorer.file_workspace.selected_result = 0;
+                            self.refresh_file_search();
+                        }
+                    }
+                    _ => {}
+                }
+                true
+            }
+            FileWorkspaceMode::View => {
+                match (key, modifiers) {
+                    (KeyCode::UpArrow, Modifiers::NONE) => {
+                        self.explorer.file_workspace.scroll =
+                            self.explorer.file_workspace.scroll.saturating_sub(1);
+                    }
+                    (KeyCode::DownArrow, Modifiers::NONE) => {
+                        self.explorer.file_workspace.scroll += 1;
+                    }
+                    (KeyCode::PageUp, Modifiers::NONE) => {
+                        self.explorer.file_workspace.scroll =
+                            self.explorer.file_workspace.scroll.saturating_sub(12);
+                    }
+                    (KeyCode::PageDown, Modifiers::NONE) => {
+                        self.explorer.file_workspace.scroll += 12;
+                    }
+                    (KeyCode::Char('\u{1b}'), Modifiers::NONE) => {
+                        self.return_to_terminal_workspace();
+                    }
+                    _ => {}
+                }
+                true
+            }
+            FileWorkspaceMode::Edit => {
+                let workspace = &mut self.explorer.file_workspace;
+                match (key, modifiers) {
+                    (KeyCode::LeftArrow, Modifiers::NONE) => {
+                        workspace.cursor =
+                            previous_char_boundary(&workspace.content, workspace.cursor);
+                    }
+                    (KeyCode::RightArrow, Modifiers::NONE) => {
+                        workspace.cursor = next_char_boundary(&workspace.content, workspace.cursor);
+                    }
+                    (KeyCode::UpArrow, Modifiers::NONE) => {
+                        workspace.cursor =
+                            move_cursor_vertical(&workspace.content, workspace.cursor, -1);
+                    }
+                    (KeyCode::DownArrow, Modifiers::NONE) => {
+                        workspace.cursor =
+                            move_cursor_vertical(&workspace.content, workspace.cursor, 1);
+                    }
+                    (KeyCode::Char('\u{8}'), Modifiers::NONE) => {
+                        let previous = previous_char_boundary(&workspace.content, workspace.cursor);
+                        if previous < workspace.cursor {
+                            workspace.content.drain(previous..workspace.cursor);
+                            workspace.cursor = previous;
+                            workspace.dirty = true;
+                        }
+                    }
+                    (KeyCode::Char('\u{7f}'), Modifiers::NONE) => {
+                        let next = next_char_boundary(&workspace.content, workspace.cursor);
+                        if next > workspace.cursor {
+                            workspace.content.drain(workspace.cursor..next);
+                            workspace.dirty = true;
+                        }
+                    }
+                    (KeyCode::Char('\u{1b}'), Modifiers::NONE) => {
+                        workspace.mode = FileWorkspaceMode::View;
+                        workspace.rebuild_document();
+                    }
+                    (KeyCode::Char('\r'), Modifiers::NONE) => {
+                        workspace.content.insert(workspace.cursor, '\n');
+                        workspace.cursor += 1;
+                        workspace.dirty = true;
+                    }
+                    (KeyCode::Char('\t'), Modifiers::NONE) => {
+                        workspace.content.insert_str(workspace.cursor, "    ");
+                        workspace.cursor += 4;
+                        workspace.dirty = true;
+                    }
+                    (KeyCode::Char(character), mods)
+                        if mods == Modifiers::NONE || mods == Modifiers::SHIFT =>
+                    {
+                        if !character.is_control() {
+                            workspace.content.insert(workspace.cursor, *character);
+                            workspace.cursor += character.len_utf8();
+                            workspace.dirty = true;
+                        }
+                    }
+                    _ => {}
+                }
+                self.explorer.file_workspace.trace_test_state("edit_input");
+                self.update_title();
+                true
+            }
+            FileWorkspaceMode::Terminal => false,
+        }
+    }
+
     pub fn explorer_key_down(&mut self, key: &KeyCode, modifiers: Modifiers) -> bool {
         if !self.explorer.focused {
             return false;
@@ -1042,7 +1927,17 @@ impl TermWindow {
             (KeyCode::RightArrow, Modifiers::NONE) => self.explorer.expand_or_child(),
             (KeyCode::Char('\r'), Modifiers::NONE) => {
                 if let Some(index) = self.explorer.selected_index() {
-                    self.explorer.toggle_row(index);
+                    let file = self
+                        .explorer
+                        .rows
+                        .get(index)
+                        .filter(|row| row.kind == ExplorerRowKind::File)
+                        .and_then(|row| row.path.clone());
+                    if let Some(path) = file {
+                        self.open_file_workspace_path(path);
+                    } else {
+                        self.explorer.toggle_row(index);
+                    }
                 }
             }
             (KeyCode::Char('\r'), Modifiers::SUPER) => {
@@ -1266,6 +2161,566 @@ impl TermWindow {
             self.last_ui_item.as_ref().map(|item| &item.item_type),
             Some(UIItemType::Explorer(current)) if *current == expected
         )
+    }
+
+    fn file_workspace_item_hovered(&self, expected: &FileWorkspaceUiItem) -> bool {
+        matches!(
+            self.last_ui_item.as_ref().map(|item| &item.item_type),
+            Some(UIItemType::FileWorkspace(current)) if current == expected
+        )
+    }
+
+    fn render_file_line(
+        &mut self,
+        layers: &mut TripleLayerQuadAllocator,
+        text: &str,
+        top: f32,
+        left: f32,
+        width: f32,
+        height: f32,
+        foreground: RgbColor,
+        bold: bool,
+        logical_font_size: f64,
+        monospace: bool,
+    ) -> anyhow::Result<()> {
+        self.render_explorer_text(
+            layers,
+            text,
+            top,
+            left,
+            width,
+            height,
+            foreground,
+            if monospace {
+                "JetBrains Mono"
+            } else {
+                EXPLORER_UI_FONT_FAMILY
+            },
+            bold,
+            logical_font_size,
+        )
+    }
+
+    fn file_workspace_bounds(&self) -> (usize, usize, usize, usize) {
+        let border = self.get_os_border();
+        let tab_bar_height = if self.show_tab_bar {
+            self.tab_bar_pixel_height().unwrap_or(0.) as usize
+        } else {
+            0
+        };
+        let top = border.top.get()
+            + if self.config.tab_bar_at_bottom {
+                0
+            } else {
+                tab_bar_height
+            };
+        let bottom = self.dimensions.pixel_height.saturating_sub(
+            border.bottom.get()
+                + self.status_bar_height()
+                + if self.config.tab_bar_at_bottom {
+                    tab_bar_height
+                } else {
+                    0
+                },
+        );
+        (
+            self.explorer_width(),
+            top,
+            self.dimensions.pixel_width,
+            bottom,
+        )
+    }
+
+    pub fn paint_file_workspace(
+        &mut self,
+        layers: &mut TripleLayerQuadAllocator,
+    ) -> anyhow::Result<()> {
+        if !self.explorer.file_workspace.visible() {
+            return Ok(());
+        }
+        let (left, top, right, bottom) = self.file_workspace_bounds();
+        if right <= left || bottom <= top {
+            return Ok(());
+        }
+        let dpi = self.dimensions.dpi;
+        let scale = |value| logical_to_physical(value, dpi);
+        let width = right - left;
+        let header_height = scale(FILE_HEADER_HEIGHT);
+        let padding = scale(FILE_CONTENT_PADDING);
+        let mode = self.explorer.file_workspace.mode;
+
+        self.filled_rectangle(
+            layers,
+            0,
+            euclid::rect(left as f32, top as f32, width as f32, (bottom - top) as f32),
+            FILE_BG.to_linear_tuple_rgba(),
+        )?;
+        self.filled_rectangle(
+            layers,
+            0,
+            euclid::rect(left as f32, top as f32, width as f32, header_height as f32),
+            FILE_HEADER_BG.to_linear_tuple_rgba(),
+        )?;
+        self.filled_rectangle(
+            layers,
+            2,
+            euclid::rect(
+                left as f32,
+                (top + header_height - scale(1)) as f32,
+                width as f32,
+                scale(1) as f32,
+            ),
+            FILE_BORDER.to_linear_tuple_rgba(),
+        )?;
+        self.ui_items.push(UIItem {
+            x: left,
+            y: top,
+            width,
+            height: bottom - top,
+            item_type: UIItemType::FileWorkspace(FileWorkspaceUiItem::Surface),
+        });
+
+        let terminal_x = left + scale(12);
+        let terminal_width = scale(88);
+        if self.file_workspace_item_hovered(&FileWorkspaceUiItem::TerminalTab) {
+            self.filled_rectangle(
+                layers,
+                0,
+                euclid::rect(
+                    terminal_x as f32,
+                    (top + scale(6)) as f32,
+                    terminal_width as f32,
+                    (header_height - scale(12)) as f32,
+                ),
+                HOVER_BG.to_linear_tuple_rgba(),
+            )?;
+        }
+        self.render_file_line(
+            layers,
+            "‹ TERMINAL",
+            top as f32,
+            terminal_x as f32,
+            terminal_width as f32,
+            header_height as f32,
+            MUTED,
+            false,
+            12.0,
+            false,
+        )?;
+        self.ui_items.push(UIItem {
+            x: terminal_x,
+            y: top,
+            width: terminal_width,
+            height: header_height,
+            item_type: UIItemType::FileWorkspace(FileWorkspaceUiItem::TerminalTab),
+        });
+
+        let path_label = self
+            .explorer
+            .file_workspace
+            .active_path
+            .as_deref()
+            .map(|path| {
+                self.active_workspace_root()
+                    .and_then(|root| path.strip_prefix(root).ok().map(Path::to_path_buf))
+                    .unwrap_or_else(|| path.to_path_buf())
+                    .display()
+                    .to_string()
+            })
+            .unwrap_or_else(|| "QUICK OPEN".to_string());
+        let dirty_suffix = if self.explorer.file_workspace.dirty {
+            "  ●"
+        } else {
+            ""
+        };
+        let title = format!("{path_label}{dirty_suffix}");
+        let title_left = terminal_x + terminal_width + scale(12);
+        let action_width = scale(74);
+        let action_x = right.saturating_sub(action_width + scale(12));
+        self.render_file_line(
+            layers,
+            &title,
+            top as f32,
+            title_left as f32,
+            action_x.saturating_sub(title_left + scale(8)) as f32,
+            header_height as f32,
+            TEXT,
+            false,
+            13.0,
+            false,
+        )?;
+
+        if self.explorer.file_workspace.active_path.is_some()
+            && !matches!(mode, FileWorkspaceMode::Search)
+        {
+            let hovered = self.file_workspace_item_hovered(&FileWorkspaceUiItem::EditToggle);
+            if hovered || mode == FileWorkspaceMode::Edit {
+                self.filled_rectangle(
+                    layers,
+                    0,
+                    euclid::rect(
+                        action_x as f32,
+                        (top + scale(6)) as f32,
+                        action_width as f32,
+                        (header_height - scale(12)) as f32,
+                    ),
+                    if mode == FileWorkspaceMode::Edit {
+                        ACTIVE_SELECTION_BG
+                    } else {
+                        HOVER_BG
+                    }
+                    .to_linear_tuple_rgba(),
+                )?;
+            }
+            self.render_file_line(
+                layers,
+                if mode == FileWorkspaceMode::Edit {
+                    "PREVIEW"
+                } else {
+                    "EDIT"
+                },
+                top as f32,
+                (action_x + scale(10)) as f32,
+                action_width.saturating_sub(scale(20)) as f32,
+                header_height as f32,
+                TEXT,
+                false,
+                12.0,
+                false,
+            )?;
+            self.ui_items.push(UIItem {
+                x: action_x,
+                y: top,
+                width: action_width,
+                height: header_height,
+                item_type: UIItemType::FileWorkspace(FileWorkspaceUiItem::EditToggle),
+            });
+        }
+
+        let content_top = top + header_height;
+        if mode == FileWorkspaceMode::Search {
+            let input_margin = scale(18);
+            let input_top = content_top + input_margin;
+            let input_height = scale(FILE_SEARCH_HEIGHT);
+            let input_left = left + input_margin;
+            let input_width = width.saturating_sub(input_margin * 2);
+            self.filled_rectangle(
+                layers,
+                0,
+                euclid::rect(
+                    input_left as f32,
+                    input_top as f32,
+                    input_width as f32,
+                    input_height as f32,
+                ),
+                FILE_INPUT_BG.to_linear_tuple_rgba(),
+            )?;
+            self.filled_rectangle(
+                layers,
+                2,
+                euclid::rect(
+                    input_left as f32,
+                    (input_top + input_height - scale(2)) as f32,
+                    input_width as f32,
+                    scale(2) as f32,
+                ),
+                FILE_ACCENT.to_linear_tuple_rgba(),
+            )?;
+            let query = if self.explorer.file_workspace.query.is_empty() {
+                "Search files by name…".to_string()
+            } else {
+                format!("{}│", self.explorer.file_workspace.query)
+            };
+            self.render_file_line(
+                layers,
+                &query,
+                input_top as f32,
+                (input_left + scale(12)) as f32,
+                input_width.saturating_sub(scale(24)) as f32,
+                input_height as f32,
+                if self.explorer.file_workspace.query.is_empty() {
+                    MUTED
+                } else {
+                    TEXT
+                },
+                false,
+                14.0,
+                false,
+            )?;
+            self.ui_items.push(UIItem {
+                x: input_left,
+                y: input_top,
+                width: input_width,
+                height: input_height,
+                item_type: UIItemType::FileWorkspace(FileWorkspaceUiItem::SearchBox),
+            });
+
+            let result_top = input_top + input_height + scale(10);
+            let row_height = scale(FILE_ROW_HEIGHT);
+            let capacity = bottom.saturating_sub(result_top + scale(24)) / row_height;
+            let results = self.explorer.file_workspace.results.clone();
+            for (index, path) in results.into_iter().take(capacity).enumerate() {
+                let y = result_top + index * row_height;
+                let selected = index == self.explorer.file_workspace.selected_result;
+                let item = FileWorkspaceUiItem::SearchResult(index);
+                if selected || self.file_workspace_item_hovered(&item) {
+                    self.filled_rectangle(
+                        layers,
+                        0,
+                        euclid::rect(
+                            input_left as f32,
+                            y as f32,
+                            input_width as f32,
+                            row_height as f32,
+                        ),
+                        if selected {
+                            ACTIVE_SELECTION_BG
+                        } else {
+                            HOVER_BG
+                        }
+                        .to_linear_tuple_rgba(),
+                    )?;
+                }
+                let label = self
+                    .active_workspace_root()
+                    .and_then(|root| path.strip_prefix(root).ok().map(Path::to_path_buf))
+                    .unwrap_or(path)
+                    .display()
+                    .to_string();
+                self.render_file_line(
+                    layers,
+                    &label,
+                    y as f32,
+                    (input_left + scale(10)) as f32,
+                    input_width.saturating_sub(scale(20)) as f32,
+                    row_height as f32,
+                    TEXT,
+                    false,
+                    13.0,
+                    false,
+                )?;
+                self.ui_items.push(UIItem {
+                    x: input_left,
+                    y,
+                    width: input_width,
+                    height: row_height,
+                    item_type: UIItemType::FileWorkspace(item),
+                });
+            }
+            if self.explorer.file_workspace.pending_request.is_some() {
+                self.render_file_line(
+                    layers,
+                    "Searching…",
+                    (bottom - scale(28)) as f32,
+                    input_left as f32,
+                    input_width as f32,
+                    scale(22) as f32,
+                    MUTED,
+                    false,
+                    12.0,
+                    false,
+                )?;
+            } else if self.explorer.file_workspace.search_truncated {
+                self.render_file_line(
+                    layers,
+                    "Results limited to keep search responsive",
+                    (bottom - scale(28)) as f32,
+                    input_left as f32,
+                    input_width as f32,
+                    scale(22) as f32,
+                    MUTED,
+                    false,
+                    12.0,
+                    false,
+                )?;
+            }
+            return Ok(());
+        }
+
+        if let Some(error) = self.explorer.file_workspace.error.clone() {
+            self.render_file_line(
+                layers,
+                &format!("Unable to open file: {error}"),
+                (content_top + padding) as f32,
+                (left + padding) as f32,
+                width.saturating_sub(padding * 2) as f32,
+                scale(28) as f32,
+                ERROR,
+                false,
+                FILE_BODY_FONT_LOGICAL_SIZE,
+                false,
+            )?;
+            return Ok(());
+        }
+        if self.explorer.file_workspace.pending_request.is_some()
+            && self.explorer.file_workspace.content.is_empty()
+        {
+            self.render_file_line(
+                layers,
+                "Opening file…",
+                (content_top + padding) as f32,
+                (left + padding) as f32,
+                width.saturating_sub(padding * 2) as f32,
+                scale(28) as f32,
+                MUTED,
+                false,
+                FILE_BODY_FONT_LOGICAL_SIZE,
+                false,
+            )?;
+            return Ok(());
+        }
+
+        let body_left = left + padding;
+        let body_right = right.saturating_sub(padding);
+        let body_top = content_top + scale(14);
+        if mode == FileWorkspaceMode::Edit {
+            let lines = self
+                .explorer
+                .file_workspace
+                .content
+                .split('\n')
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            let cursor_prefix = &self.explorer.file_workspace.content[..self
+                .explorer
+                .file_workspace
+                .cursor
+                .min(self.explorer.file_workspace.content.len())];
+            let cursor_line = cursor_prefix.bytes().filter(|byte| *byte == b'\n').count();
+            let cursor_column = cursor_prefix
+                .rsplit('\n')
+                .next()
+                .unwrap_or("")
+                .chars()
+                .count();
+            let row_height = scale(22);
+            let capacity = bottom.saturating_sub(body_top + scale(8)) / row_height;
+            if cursor_line < self.explorer.file_workspace.scroll {
+                self.explorer.file_workspace.scroll = cursor_line;
+            } else if cursor_line >= self.explorer.file_workspace.scroll + capacity.max(1) {
+                self.explorer.file_workspace.scroll =
+                    cursor_line.saturating_sub(capacity.saturating_sub(1));
+            }
+            let scroll = self
+                .explorer
+                .file_workspace
+                .scroll
+                .min(lines.len().saturating_sub(capacity.max(1)));
+            self.explorer.file_workspace.scroll = scroll;
+            let number_width = scale(48);
+            for (screen_line, (line_index, line)) in lines
+                .into_iter()
+                .enumerate()
+                .skip(scroll)
+                .take(capacity)
+                .enumerate()
+            {
+                let y = body_top + screen_line * row_height;
+                self.render_file_line(
+                    layers,
+                    &(line_index + 1).to_string(),
+                    y as f32,
+                    body_left as f32,
+                    number_width.saturating_sub(scale(10)) as f32,
+                    row_height as f32,
+                    MUTED,
+                    false,
+                    12.0,
+                    true,
+                )?;
+                self.render_file_line(
+                    layers,
+                    &line,
+                    y as f32,
+                    (body_left + number_width) as f32,
+                    body_right.saturating_sub(body_left + number_width) as f32,
+                    row_height as f32,
+                    TEXT,
+                    false,
+                    FILE_CODE_FONT_LOGICAL_SIZE,
+                    true,
+                )?;
+                if line_index == cursor_line {
+                    let caret_x = body_left + number_width + scale(8) * cursor_column.min(500);
+                    self.filled_rectangle(
+                        layers,
+                        2,
+                        euclid::rect(
+                            caret_x as f32,
+                            (y + scale(3)) as f32,
+                            scale(1) as f32,
+                            row_height.saturating_sub(scale(6)) as f32,
+                        ),
+                        TEXT.to_linear_tuple_rgba(),
+                    )?;
+                }
+            }
+        } else {
+            let approximate_columns = body_right.saturating_sub(body_left) / scale(8).max(1);
+            self.explorer
+                .file_workspace
+                .ensure_wrapped_document(approximate_columns);
+            let lines = self.explorer.file_workspace.wrapped_document_lines.clone();
+            let row_height = scale(27);
+            let capacity = bottom.saturating_sub(body_top + scale(8)) / row_height;
+            let scroll = self
+                .explorer
+                .file_workspace
+                .scroll
+                .min(lines.len().saturating_sub(capacity.max(1)));
+            self.explorer.file_workspace.scroll = scroll;
+            for (screen_line, line) in lines.into_iter().skip(scroll).take(capacity).enumerate() {
+                let y = body_top + screen_line * row_height;
+                let (foreground, bold, font_size, monospace, indent) = match line.kind {
+                    DocumentLineKind::Heading(level) => (
+                        RgbColor::new_8bpc(230, 230, 230),
+                        true,
+                        match level {
+                            1 => 22.0,
+                            2 => 19.0,
+                            _ => 16.0,
+                        },
+                        false,
+                        0,
+                    ),
+                    DocumentLineKind::Code => (TEXT, false, 14.0, true, scale(12)),
+                    DocumentLineKind::Quote => (MUTED, false, 15.0, false, scale(10)),
+                    DocumentLineKind::List => (TEXT, false, 15.0, false, scale(8)),
+                    DocumentLineKind::Rule => (FILE_BORDER, false, 15.0, false, 0),
+                    DocumentLineKind::Body => (TEXT, false, 15.0, false, 0),
+                };
+                if line.kind == DocumentLineKind::Code {
+                    self.filled_rectangle(
+                        layers,
+                        0,
+                        euclid::rect(
+                            body_left as f32,
+                            y as f32,
+                            body_right.saturating_sub(body_left) as f32,
+                            row_height as f32,
+                        ),
+                        FILE_CODE_BG.to_linear_tuple_rgba(),
+                    )?;
+                }
+                self.render_file_line(
+                    layers,
+                    &line.text,
+                    y as f32,
+                    (body_left + indent) as f32,
+                    body_right.saturating_sub(body_left + indent) as f32,
+                    row_height as f32,
+                    if line.text.contains("‹http") {
+                        FILE_LINK
+                    } else {
+                        foreground
+                    },
+                    bold,
+                    font_size,
+                    monospace,
+                )?;
+            }
+        }
+        Ok(())
     }
 
     pub fn paint_explorer(&mut self, layers: &mut TripleLayerQuadAllocator) -> anyhow::Result<()> {
@@ -1734,6 +3189,92 @@ impl TermWindow {
         context.set_cursor(Some(MouseCursor::SizeLeftRight));
     }
 
+    pub fn mouse_event_file_workspace(
+        &mut self,
+        item: FileWorkspaceUiItem,
+        event: MouseEvent,
+        context: &dyn WindowOps,
+    ) {
+        context.set_cursor(Some(MouseCursor::Arrow));
+        match event.kind {
+            MouseEventKind::Press(MousePress::Left) => match item {
+                FileWorkspaceUiItem::TerminalTab => self.return_to_terminal_workspace(),
+                FileWorkspaceUiItem::SearchResult(index) => {
+                    self.explorer.file_workspace.selected_result = index;
+                    self.open_selected_search_result();
+                }
+                FileWorkspaceUiItem::EditToggle => {
+                    match self.explorer.file_workspace.mode {
+                        FileWorkspaceMode::View => {
+                            self.explorer.file_workspace.mode = FileWorkspaceMode::Edit;
+                            self.explorer.file_workspace.cursor =
+                                self.explorer.file_workspace.content.len();
+                        }
+                        FileWorkspaceMode::Edit => {
+                            self.explorer.file_workspace.mode = FileWorkspaceMode::View;
+                            self.explorer.file_workspace.rebuild_document();
+                        }
+                        _ => {}
+                    }
+                    self.update_title();
+                    context.invalidate();
+                }
+                FileWorkspaceUiItem::Surface
+                    if self.explorer.file_workspace.mode == FileWorkspaceMode::Edit =>
+                {
+                    let (left, top, _, _) = self.file_workspace_bounds();
+                    let scale = |value| logical_to_physical(value, self.dimensions.dpi);
+                    let body_top = top + scale(FILE_HEADER_HEIGHT) + scale(14);
+                    let body_left = left + scale(FILE_CONTENT_PADDING) + scale(48);
+                    let row_height = scale(22).max(1);
+                    let clicked_line = self.explorer.file_workspace.scroll
+                        + event.coords.y.saturating_sub(body_top as isize).max(0) as usize
+                            / row_height;
+                    let clicked_column = event.coords.x.saturating_sub(body_left as isize).max(0)
+                        as usize
+                        / scale(8).max(1);
+                    let mut offset = 0usize;
+                    for (index, line) in self
+                        .explorer
+                        .file_workspace
+                        .content
+                        .split_inclusive('\n')
+                        .enumerate()
+                    {
+                        if index == clicked_line {
+                            let line_without_newline = line.strip_suffix('\n').unwrap_or(line);
+                            let column_offset = line_without_newline
+                                .char_indices()
+                                .nth(clicked_column)
+                                .map(|(offset, _)| offset)
+                                .unwrap_or(line_without_newline.len());
+                            self.explorer.file_workspace.cursor = offset + column_offset;
+                            break;
+                        }
+                        offset += line.len();
+                    }
+                    context.invalidate();
+                }
+                FileWorkspaceUiItem::Surface | FileWorkspaceUiItem::SearchBox => {}
+            },
+            MouseEventKind::VertWheel(delta)
+                if !matches!(self.explorer.file_workspace.mode, FileWorkspaceMode::Search) =>
+            {
+                if delta > 0 {
+                    self.explorer.file_workspace.scroll = self
+                        .explorer
+                        .file_workspace
+                        .scroll
+                        .saturating_sub(delta as usize);
+                } else {
+                    self.explorer.file_workspace.scroll += (-delta) as usize;
+                }
+                context.invalidate();
+            }
+            _ => {}
+        }
+    }
+
     pub fn mouse_event_explorer(
         &mut self,
         item: ExplorerUiItem,
@@ -1770,12 +3311,20 @@ impl TermWindow {
                     MouseEventKind::Press(MousePress::Left) => {
                         self.explorer.set_selected_index(index);
                         self.explorer.focused = true;
+                        let selected_file = self
+                            .explorer
+                            .rows
+                            .get(index)
+                            .filter(|row| row.kind == ExplorerRowKind::File)
+                            .and_then(|row| row.path.clone());
                         let double_click = self
                             .last_mouse_click
                             .as_ref()
                             .map(|click| click.streak >= 2)
                             .unwrap_or(false);
-                        if double_click {
+                        if let Some(path) = selected_file {
+                            self.open_file_workspace_path(path);
+                        } else if double_click {
                             self.spawn_selected_explorer_directory(false);
                         } else {
                             self.explorer.toggle_row(index);
