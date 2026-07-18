@@ -21,6 +21,8 @@ const CODEX_ROLLOUT_INITIAL_TAIL_BYTES: u64 = 512 * 1024;
 const CODEX_ROLLOUT_MAX_TAIL_BYTES: u64 = 8 * 1024 * 1024;
 const CODEX_ROLLOUT_DISCOVERY_INTERVAL: Duration = Duration::from_secs(15);
 const CODEX_ROLLOUT_CANDIDATE_LIMIT: usize = 16;
+#[cfg(target_os = "macos")]
+const SYSTEM_CAPACITY_REFRESH_INTERVAL: Duration = Duration::from_secs(10);
 
 #[derive(Deserialize)]
 struct CloseLockCredential {
@@ -887,6 +889,54 @@ impl CodexStatusSnapshot {
     }
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SystemCapacitySnapshot {
+    pub cpu_used_percent: Option<u8>,
+    pub memory_used_bytes: Option<u64>,
+    pub memory_total_bytes: Option<u64>,
+}
+
+impl SystemCapacitySnapshot {
+    pub fn status_label(&self) -> Option<String> {
+        let cpu = self
+            .cpu_used_percent
+            .map(|percent| format!("CPU {percent}%"));
+        let memory = self
+            .memory_used_bytes
+            .zip(self.memory_total_bytes)
+            .filter(|(_, total)| *total > 0)
+            .map(|(used, total)| {
+                format!(
+                    "RAM {}/{} GB",
+                    format_memory_gb(used.min(total)),
+                    format_memory_gb(total)
+                )
+            });
+        match (cpu, memory) {
+            (Some(cpu), Some(memory)) => Some(format!("{cpu} · {memory}")),
+            (Some(cpu), None) => Some(cpu),
+            (None, Some(memory)) => Some(memory),
+            (None, None) => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WorkspaceStatusSnapshot {
+    pub codex: CodexStatusSnapshot,
+    pub system: SystemCapacitySnapshot,
+}
+
+fn format_memory_gb(bytes: u64) -> String {
+    const GIB: u128 = 1024 * 1024 * 1024;
+    let tenths = (u128::from(bytes) * 10 + GIB / 2) / GIB;
+    if tenths % 10 == 0 {
+        (tenths / 10).to_string()
+    } else {
+        format!("{}.{}", tenths / 10, tenths % 10)
+    }
+}
+
 #[derive(Default)]
 struct CodexStatusReader {
     observed_head: Option<(SystemTime, PathBuf)>,
@@ -942,6 +992,199 @@ impl CodexStatusReader {
         }
         self.snapshot.clone()
     }
+}
+
+#[derive(Default)]
+struct WorkspaceStatusReader {
+    codex: CodexStatusReader,
+    system: SystemCapacityReader,
+}
+
+impl WorkspaceStatusReader {
+    fn read(&mut self, codex_home: &Path) -> WorkspaceStatusSnapshot {
+        WorkspaceStatusSnapshot {
+            codex: self.codex.read(codex_home),
+            system: self.system.read(),
+        }
+    }
+}
+
+struct SystemCapacityReader {
+    #[cfg(target_os = "macos")]
+    host: libc::host_t,
+    #[cfg(target_os = "macos")]
+    previous_cpu_ticks: Option<[u32; libc::CPU_STATE_MAX as usize]>,
+    #[cfg(target_os = "macos")]
+    memory_total_bytes: Option<u64>,
+    #[cfg(target_os = "macos")]
+    page_size_bytes: Option<u64>,
+    #[cfg(target_os = "macos")]
+    last_refresh: Option<Instant>,
+    #[cfg(target_os = "macos")]
+    snapshot: SystemCapacitySnapshot,
+}
+
+impl Default for SystemCapacityReader {
+    fn default() -> Self {
+        Self {
+            #[cfg(target_os = "macos")]
+            host: {
+                #[allow(deprecated)]
+                unsafe {
+                    libc::mach_host_self()
+                }
+            },
+            #[cfg(target_os = "macos")]
+            previous_cpu_ticks: None,
+            #[cfg(target_os = "macos")]
+            memory_total_bytes: None,
+            #[cfg(target_os = "macos")]
+            page_size_bytes: None,
+            #[cfg(target_os = "macos")]
+            last_refresh: None,
+            #[cfg(target_os = "macos")]
+            snapshot: SystemCapacitySnapshot::default(),
+        }
+    }
+}
+
+impl SystemCapacityReader {
+    fn read(&mut self) -> SystemCapacitySnapshot {
+        #[cfg(target_os = "macos")]
+        {
+            let now = Instant::now();
+            let needs_cpu_seed =
+                self.snapshot.cpu_used_percent.is_none() && self.previous_cpu_ticks.is_some();
+            if !needs_cpu_seed
+                && self
+                    .last_refresh
+                    .map(|last| now.duration_since(last) < SYSTEM_CAPACITY_REFRESH_INTERVAL)
+                    .unwrap_or(false)
+            {
+                return self.snapshot.clone();
+            }
+
+            let cpu_ticks = macos_cpu_ticks(self.host);
+            let cpu_used_percent = self
+                .previous_cpu_ticks
+                .zip(cpu_ticks)
+                .and_then(|(previous, current)| cpu_used_percent(previous, current));
+            if cpu_ticks.is_some() {
+                self.previous_cpu_ticks = cpu_ticks;
+            }
+
+            if self.memory_total_bytes.is_none() {
+                self.memory_total_bytes = macos_total_memory_bytes();
+            }
+            if self.page_size_bytes.is_none() {
+                let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+                if page_size > 0 {
+                    self.page_size_bytes = Some(page_size as u64);
+                }
+            }
+            let memory_used_bytes = self
+                .page_size_bytes
+                .and_then(|page_size| macos_memory_used_bytes(self.host, page_size))
+                .map(|used| {
+                    self.memory_total_bytes
+                        .map(|total| used.min(total))
+                        .unwrap_or(used)
+                });
+
+            self.snapshot = SystemCapacitySnapshot {
+                cpu_used_percent,
+                memory_used_bytes,
+                memory_total_bytes: self.memory_total_bytes,
+            };
+            self.last_refresh = Some(now);
+            self.snapshot.clone()
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            SystemCapacitySnapshot::default()
+        }
+    }
+}
+
+fn cpu_used_percent<const N: usize>(previous: [u32; N], current: [u32; N]) -> Option<u8> {
+    if N <= 2 {
+        return None;
+    }
+    let deltas = std::array::from_fn::<u64, N, _>(|index| {
+        u64::from(current[index].wrapping_sub(previous[index]))
+    });
+    let total = deltas.iter().copied().sum::<u64>();
+    if total == 0 {
+        return None;
+    }
+    let idle = deltas[2];
+    let active = total.saturating_sub(idle);
+    Some(((active * 100 + total / 2) / total).min(100) as u8)
+}
+
+#[cfg(target_os = "macos")]
+fn macos_cpu_ticks(host: libc::host_t) -> Option<[u32; libc::CPU_STATE_MAX as usize]> {
+    let mut ticks = [0_u32; libc::CPU_STATE_MAX as usize];
+    let mut count = libc::HOST_CPU_LOAD_INFO_COUNT;
+    // SAFETY: HOST_CPU_LOAD_INFO writes exactly CPU_STATE_MAX natural_t tick
+    // counters. On Darwin natural_t is u32, matching this fixed-size buffer.
+    let result = unsafe {
+        libc::host_statistics(
+            host,
+            libc::HOST_CPU_LOAD_INFO,
+            ticks.as_mut_ptr() as libc::host_info_t,
+            &mut count,
+        )
+    };
+    (result == libc::KERN_SUCCESS).then_some(ticks)
+}
+
+#[cfg(target_os = "macos")]
+fn macos_total_memory_bytes() -> Option<u64> {
+    let mut mib = [libc::CTL_HW, libc::HW_MEMSIZE];
+    let mut total = 0_u64;
+    let mut size = std::mem::size_of::<u64>();
+    // SAFETY: `mib` requests the fixed-width hw.memsize value, and `total`
+    // points to a writable u64 whose size is supplied to sysctl.
+    let result = unsafe {
+        libc::sysctl(
+            mib.as_mut_ptr(),
+            mib.len() as libc::c_uint,
+            &mut total as *mut u64 as *mut libc::c_void,
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    (result == 0 && size == std::mem::size_of::<u64>() && total > 0).then_some(total)
+}
+
+#[cfg(target_os = "macos")]
+fn macos_memory_used_bytes(host: libc::host_t, page_size_bytes: u64) -> Option<u64> {
+    let mut info = unsafe { std::mem::zeroed::<libc::vm_statistics64>() };
+    let mut count = libc::HOST_VM_INFO64_COUNT;
+    // SAFETY: `info` is the exact structure required for HOST_VM_INFO64,
+    // and `count` advertises that structure's size in Mach integer units.
+    let result = unsafe {
+        libc::host_statistics64(
+            host,
+            libc::HOST_VM_INFO64,
+            &mut info as *mut libc::vm_statistics64 as libc::host_info64_t,
+            &mut count,
+        )
+    };
+    if result != libc::KERN_SUCCESS {
+        return None;
+    }
+
+    // Match macOS's meaningful occupied-memory view: anonymous pages that
+    // cannot be purged, wired pages, and the compressed-memory store. This
+    // excludes reclaimable file cache from the "used" number.
+    let used_pages = u64::from(info.internal_page_count)
+        .saturating_sub(u64::from(info.purgeable_count))
+        .saturating_add(u64::from(info.wire_count))
+        .saturating_add(u64::from(info.compressor_page_count));
+    Some(used_pages.saturating_mul(page_size_bytes))
 }
 
 fn newest_rollout_paths(root: &Path) -> Vec<(SystemTime, PathBuf)> {
@@ -1103,14 +1346,14 @@ pub enum ServiceResponse {
     DirectoryListed(DirectoryListing),
     ContextResolved(PaneContext),
     GitStatusLoaded(GitStatusSnapshot),
-    CodexStatusLoaded(CodexStatusSnapshot),
+    WorkspaceStatusLoaded(WorkspaceStatusSnapshot),
     DirectoryChanged(Vec<PathBuf>),
     WatcherError(String),
 }
 
 enum ContextRequest {
     Pane(PaneContextRequest),
-    CodexStatus(PathBuf),
+    WorkspaceStatus(PathBuf),
 }
 
 pub struct WorkspaceService {
@@ -1148,16 +1391,14 @@ impl WorkspaceService {
         std::thread::Builder::new()
             .name("cosmos-pane-context".to_string())
             .spawn(move || {
-                let mut codex_status_reader = CodexStatusReader::default();
+                let mut status_reader = WorkspaceStatusReader::default();
                 while let Ok(request) = context_rx.recv() {
                     let response = match request {
                         ContextRequest::Pane(request) => {
                             ServiceResponse::ContextResolved(PaneContext::resolve(request))
                         }
-                        ContextRequest::CodexStatus(codex_home) => {
-                            ServiceResponse::CodexStatusLoaded(
-                                codex_status_reader.read(&codex_home),
-                            )
+                        ContextRequest::WorkspaceStatus(codex_home) => {
+                            ServiceResponse::WorkspaceStatusLoaded(status_reader.read(&codex_home))
                         }
                     };
                     if context_response_tx.send(response).is_err() {
@@ -1240,10 +1481,10 @@ impl WorkspaceService {
         let _ = self.context_tx.send(ContextRequest::Pane(request));
     }
 
-    pub fn codex_status(&self, codex_home: PathBuf) {
+    pub fn workspace_status(&self, codex_home: PathBuf) {
         let _ = self
             .context_tx
-            .send(ContextRequest::CodexStatus(codex_home));
+            .send(ContextRequest::WorkspaceStatus(codex_home));
     }
 
     pub fn git_status(&self, root: PathBuf) {
@@ -1554,6 +1795,51 @@ mod tests {
             .window_label(),
             "5h"
         );
+    }
+
+    #[test]
+    fn calculates_cpu_usage_from_tick_deltas() {
+        assert_eq!(
+            cpu_used_percent([100, 50, 700, 10], [130, 70, 750, 10]),
+            Some(50)
+        );
+        assert_eq!(cpu_used_percent([1, 2, 3, 4], [1, 2, 3, 4]), None);
+    }
+
+    #[test]
+    fn formats_compact_system_capacity_labels() {
+        let gib = 1024_u64 * 1024 * 1024;
+        let capacity = SystemCapacitySnapshot {
+            cpu_used_percent: Some(12),
+            memory_used_bytes: Some(18 * gib + gib / 2),
+            memory_total_bytes: Some(36 * gib),
+        };
+        assert_eq!(
+            capacity.status_label().as_deref(),
+            Some("CPU 12% · RAM 18.5/36 GB")
+        );
+        assert_eq!(
+            SystemCapacitySnapshot {
+                memory_used_bytes: Some(8 * gib),
+                memory_total_bytes: Some(16 * gib),
+                ..SystemCapacitySnapshot::default()
+            }
+            .status_label()
+            .as_deref(),
+            Some("RAM 8/16 GB")
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn reads_native_macos_system_capacity() {
+        let mut reader = SystemCapacityReader::default();
+        let snapshot = reader.read();
+        let used = snapshot.memory_used_bytes.unwrap();
+        let total = snapshot.memory_total_bytes.unwrap();
+        assert!(used > 0);
+        assert!(used <= total);
+        assert!(macos_cpu_ticks(reader.host).is_some());
     }
 
     #[test]
