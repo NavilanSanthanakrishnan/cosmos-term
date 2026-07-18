@@ -7,8 +7,9 @@ Updated: 2026-07-18
 V1 is implemented, packaged, and installed at
 `/Applications/Cosmos Term.app`. The source repository is public at
 `https://github.com/NavilanSanthanakrishnan/cosmos-term`; the product launch
-landed on `main`. Lightweight system-capacity footer work is staged on
-`agent/system-capacity-status` for review before the first public prerelease.
+and lightweight system-capacity footer are merged on `main`. The first public
+Apple-silicon prerelease is
+`https://github.com/NavilanSanthanakrishnan/cosmos-term/releases/tag/v0.1.0-alpha.1`.
 
 Cosmos Term is a native WezTerm fork, not a wrapper. It retains terminal tabs,
 splits, rendering, Lua configuration, and mux behavior while adding the left
@@ -168,6 +169,12 @@ explorer and using independent application/runtime identities.
   packaged process; the
   installed Cosmos PID and default tmux clients were unchanged before and
   after the capture.
+- Public prerelease `v0.1.0-alpha.1` targets merge commit
+  `000b4bcfc91457d0ca9e8d0319630a814cb342ef`. Its 52,182,993-byte
+  `Cosmos-Term-macos-arm64.zip` re-downloaded with SHA-256
+  `ce0f160ebd6747a8bb40c3b115f6478b8cb22c9acb26b53b5b316ad7fe22cff8`.
+  GitHub reports both the ZIP and portable checksum assets uploaded, and the
+  archive passed `unzip -t`.
 
 ## Verification commands
 
@@ -215,8 +222,6 @@ intentional:
 
 ## Remaining release work
 
-- Merge the reviewed capacity-status branch and publish the first arm64
-  prerelease artifact.
 - The local bundle is ad-hoc signed and is not notarized.
 - Automated release packaging and migration to a newer upstream WezTerm
   baseline remain future work.
