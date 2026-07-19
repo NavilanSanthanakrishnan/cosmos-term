@@ -1,6 +1,6 @@
 # Cosmos Term Session Handoff
 
-Updated: 2026-07-18
+Updated: 2026-07-19
 
 ## Current state
 
@@ -83,6 +83,19 @@ explorer and using independent application/runtime identities.
   overriding current-folder scope.
 - A two-pane tmux session on a dedicated socket reports source `tmux` and
   follows tmux pane selection from one directory to another.
+- A visible tmux file workspace reserves `<prefix> 0` as an explicit,
+  pane-owner-bound Explorer keyboard mode. W/S move one row,
+  Shift+W/Shift+S move five, A/D and arrows collapse or expand, Return
+  activates the selected row, and Escape exits. Unknown keys and every other
+  prefix command still use the live tmux input path; focusing another tmux
+  pane releases Explorer mode instead of transferring or swapping the file
+  surface.
+- The horizontal-split regression was reproduced on a dedicated tmux 3.7b
+  socket after a multi-column `ls`. Cosmos and `stty` both reported the exact
+  100-column client split into 50/49-column panes, and the rendered divider
+  matched that geometry. The rearranged historical `ls` text is tmux's own
+  resize reflow; Cosmos adds no second width offset and new output uses the
+  correct pane width.
 - Existing WezTerm and default tmux clients remained unchanged during testing.
 - A hostile inherited `WEZTERM_CONFIG_FILE` and `WEZTERM_UNIX_SOCKET` do not
   redirect Cosmos Term; its bundled config and Cosmos socket are used.

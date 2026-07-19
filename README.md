@@ -126,6 +126,13 @@ is active; tmux navigation and input work normally after focusing another
 pane, and the configured `prefix` and `prefix2` remain available for tmux
 commands.
 
+When a file workspace is visible in tmux, `<prefix> 0` explicitly focuses its
+Explorer. In that pane-local mode, `W`/`S` move one row, `Shift+W`/`Shift+S`
+move five rows, `A`/`D` collapse or expand, and `Return` opens the selected
+file or toggles a directory. `Escape`, changing tmux pane focus, or
+`<prefix> 0` again returns normal input to tmux. All other prefix commands
+continue to tmux while Explorer navigation is active.
+
 Markdown opens as a formatted document with headings, lists, quotes, code
 blocks, task markers, rules, and visible link destinations. Other UTF-8 text
 files open in a code-oriented view. The terminal or tmux pane remains alive
@@ -137,6 +144,10 @@ non-Cosmos keyboard input to that pane.
 | `Command+S` | Toggle between the terminal and file workspace |
 | `Command+E` | Toggle preview/edit mode |
 | `Command+Return` | Atomically save an edited file |
+| `<tmux prefix> 0` | Toggle pane-local Explorer keyboard navigation |
+| `W` / `S` | Move one Explorer row while keyboard navigation is active |
+| `Shift+W` / `Shift+S` | Move five Explorer rows |
+| `Return` | Open the selected file or toggle its directory |
 | `Escape` | Leave edit mode; from native preview, return to terminal |
 | `Command+Shift+D` | Discard edits and reload the file from disk |
 
