@@ -106,11 +106,11 @@ returns keyboard focus to that pane.
 
 ## File workspace
 
-`Command+S` switches the right side between the live terminal and a file
-workspace tied to the focused native or tmux pane. The workspace starts empty:
-select a file from the left Explorer to load it. Changing to a pane with a
-different working directory resets a clean file workspace instead of carrying
-the old file into the new pane.
+`Command+S` switches only the focused native or tmux pane between its live
+terminal and file workspace. Other panes stay visible, live, and interactive.
+The workspace starts empty: select a file from the left Explorer to load it.
+Changing to a pane with a different working directory resets a clean file
+workspace instead of carrying the old file into the new pane.
 
 Markdown opens as a formatted document with headings, lists, quotes, code
 blocks, task markers, rules, and visible link destinations. Other UTF-8 text

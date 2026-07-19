@@ -176,12 +176,13 @@ explorer and using independent application/runtime identities.
   `ce0f160ebd6747a8bb40c3b115f6478b8cb22c9acb26b53b5b316ad7fe22cff8`.
   GitHub reports both the ZIP and portable checksum assets uploaded, and the
   archive passed `unzip -t`.
-- `Command+S` toggles only the right-side presentation between the focused
-  terminal/tmux pane and its file workspace. A new native/tmux pane context
-  opens a blank `FILE WORKSPACE` with no selected file and no search field;
-  the user must choose a visible file from the left Explorer. A clean
-  workspace resets when the focused pane or its resolved CWD changes. The
-  terminal/tmux process remains alive underneath throughout.
+- `Command+S` toggles only the focused native or inner tmux pane between its
+  terminal and file workspace. Native pane bounds come from WezTerm; inner
+  tmux bounds come from the active pane's `left/top/width/height` cell
+  geometry. Every inactive pane remains rendered and live. A new pane context
+  opens a blank `FILE WORKSPACE` with no selected file or search field; the
+  user must choose a visible file from the left Explorer. A clean workspace
+  resets when the focused pane or its resolved CWD changes.
 - Explorer file activation uses the native loader. Markdown is rendered with
   headings, lists, quotes, code, rules, task markers, visible link
   destinations, width-aware prose wrapping, common HTML cleanup, and table
@@ -199,26 +200,29 @@ explorer and using independent application/runtime identities.
   open → edit → type → atomic save with the GUI process continuously alive.
   Changing its shell from the workspace root to `docs/` reset the panel to the
   `DOCS` Explorer root with no selected file. The workspace
-  suite now has 23 passing tests, including out-of-root rejection, atomic
-  save cleanup, and external-revision conflict. Full GUI/CLI/mux checks,
+  suite now has 24 passing tests, including tmux geometry parsing,
+  out-of-root rejection, atomic save cleanup, and external-revision conflict.
+  Full GUI/CLI/mux checks,
   release packaging, strict signature verification, plist validation, and
   `git diff --check` pass. The repository-wide format check still reports only
   the pre-existing `window/src/os/macos/app.rs` difference.
-- Before this replacement, the installed formatted-file-workspace build was
-  copied to
-  `~/Applications/Cosmos Term Releases/Cosmos Term-before-command-s-toggle-2026-07-18.app`
-  (GUI SHA-256 `0ad853d88dd45511ab71cb7676e6434d150db85d96794d088d7b2a990b532f0a`).
-  The signed toggle candidate is staged as
-  `Cosmos Term-command-s-toggle-2026-07-18.app` in the same directory (GUI
-  SHA-256 `57502ba40b2b7217692dbe3dd1e578de80100c5029bbbcdd9285be355ffe641f`).
-  That exact binary is installed at `/Applications/Cosmos Term.app`. Installed
-  PID 65297 launched in the repository; the first live `Command+S` displayed
-  `FILE WORKSPACE` with no selected file or search field, and the second
-  `Command+S` restored the same `zsh` pane at the same CWD. PID 65297 and its
-  shell child remained continuously alive. The installed empty-panel capture
-  is `/tmp/cosmos-file-workspace-capture/installed-command-s-empty.png`
-  (SHA-256
-  `efa2ad09ff1a9642bf3e4cfb69654197b133159f572b5a1a0dc4541568b56bf9`).
+- The final pane-scoped release was exercised against a two-pane tmux session
+  on a dedicated socket. Left and right selection each produced an opaque file
+  workspace inside only the active tmux pane while the other pane stayed
+  visible. Captures are
+  `/tmp/cosmos-file-workspace-capture/tmux-pane-final2-left.png`
+  (`bcb87493ea7973920ab3c723e39c818f6d910c7db0b4562d27eae5124d8e1bf7`)
+  and `tmux-pane-final2-right.png`
+  (`c5d950301de4fc76bc6a5a12d64c5b7f4a7bdf0cee343fe4a3c1b7752cafc137`).
+  The dedicated server was stopped, and default tmux clients and installed
+  WezTerm processes were unchanged.
+- The exact signed binary installed at `/Applications/Cosmos Term.app` has
+  SHA-256
+  `071eda76ab3a598dbaa1a53047e6365b75a1e30e47181d31b87d797d8a6eabe1`.
+  PID 69573 is open in the repository for the user. All old release backups,
+  disposable test bundles, and the generated `dist` bundle were deleted;
+  `/Applications/Cosmos Term.app` is the only runnable Cosmos Term bundle
+  outside the required source template.
 
 ## Verification commands
 
