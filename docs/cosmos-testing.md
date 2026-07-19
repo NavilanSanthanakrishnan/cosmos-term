@@ -242,14 +242,16 @@ Verify:
 - click a file or the Explorer surface so the sidebar is visually focused,
   then confirm a disposable direct binding on an Explorer key such as `R`
   still reaches tmux instead of triggering an Explorer action
-- while preview owns the active pane, press `<prefix> 0`; confirm the Explorer
-  receives the active selection, W/S move one row, Shift+W/Shift+S move five
-  rows, and Return opens the selected file in the same pane surface. Exercise
+- from both the workspace owner and the other tmux pane, press `<prefix> 0`;
+  confirm the Explorer receives the active selection, W/S move one row,
+  Shift+W/Shift+S move five rows, and Return opens the selected file in the
+  active pane surface. Repeat once while the file surface is hidden. Exercise
   the Shift shortcuts through physical macOS key events because the text-input
   pass can normalize them to uppercase W/S without a Shift modifier flag
-- while Explorer keyboard navigation is active, run a different tmux prefix
-  command and confirm it still reaches tmux; change pane focus and confirm
-  Explorer mode exits without moving or swapping the workspace
+- while Explorer keyboard navigation is active, run positional `<prefix> 1`
+  and `<prefix> 2`; confirm each exits navigation and selects the intended
+  tmux pane without moving or swapping the workspace. Confirm the next W/S key
+  reaches that pane rather than remaining captured by the Explorer
 - print a multi-column `ls`, create a horizontal split, and record
   `#{client_width}`, `#{pane_width}`, and `stty size` for both panes. Confirm
   the rendered divider agrees exactly with tmux's reported 50/49-style grid;

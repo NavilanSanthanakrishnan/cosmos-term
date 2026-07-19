@@ -139,12 +139,10 @@ fn explorer_keyboard_action(key: &KeyCode, modifiers: Modifiers) -> Option<Explo
         // macOS can fold Shift into the uppercase character before the
         // non-binding input pass. Accept both that normalized form and the
         // explicit Shift modifier so physical Shift+W/S always moves five.
-        (KeyCode::Char('W'), Modifiers::NONE)
-        | (KeyCode::Char('w' | 'W'), Modifiers::SHIFT) => {
+        (KeyCode::Char('W'), Modifiers::NONE) | (KeyCode::Char('w' | 'W'), Modifiers::SHIFT) => {
             Some(ExplorerKeyboardAction::Move(-5))
         }
-        (KeyCode::Char('S'), Modifiers::NONE)
-        | (KeyCode::Char('s' | 'S'), Modifiers::SHIFT) => {
+        (KeyCode::Char('S'), Modifiers::NONE) | (KeyCode::Char('s' | 'S'), Modifiers::SHIFT) => {
             Some(ExplorerKeyboardAction::Move(5))
         }
         (KeyCode::UpArrow, Modifiers::NONE) => Some(ExplorerKeyboardAction::Move(-1)),
@@ -330,7 +328,7 @@ struct FileWorkspaceUi {
     owner_tmux_window_id: Option<String>,
     owner_tmux_geometry: Option<TmuxPaneGeometry>,
     owner_root: Option<PathBuf>,
-    tmux_prefix_pending: bool,
+    tmux_prefix_pending: Option<(KeyCode, Modifiers)>,
     explorer_keyboard_mode: bool,
     active_path: Option<PathBuf>,
     content: String,
@@ -356,7 +354,7 @@ impl Default for FileWorkspaceUi {
             owner_tmux_window_id: None,
             owner_tmux_geometry: None,
             owner_root: None,
-            tmux_prefix_pending: false,
+            tmux_prefix_pending: None,
             explorer_keyboard_mode: false,
             active_path: None,
             content: String::new(),
@@ -402,7 +400,7 @@ impl FileWorkspaceUi {
         self.owner_tmux_window_id = tmux_window_id;
         self.owner_tmux_geometry = tmux_geometry;
         self.owner_root = Some(root);
-        self.tmux_prefix_pending = false;
+        self.tmux_prefix_pending = None;
         self.explorer_keyboard_mode = false;
         self.active_path = None;
         self.content.clear();
@@ -1807,14 +1805,10 @@ impl TermWindow {
                 }
             }
         }
-        // Pane focus is independent from the file surface. Keep the viewer
-        // attached to its owner until Command+S or a file selection explicitly
-        // moves it to another pane.
+        // Pane focus is independent from the file surface and from the global
+        // Explorer keyboard region. Keep the viewer attached to its owner
+        // until Command+S or a file selection explicitly moves it.
         if !self.file_workspace_owns_context(&context) {
-            if self.explorer.file_workspace.explorer_keyboard_mode {
-                self.blur_explorer();
-                changed = true;
-            }
             return changed;
         }
         let root = match self.active_workspace_root() {
@@ -1994,7 +1988,7 @@ impl TermWindow {
             self.explorer.file_workspace.resume_mode = self.explorer.file_workspace.mode;
         }
         self.explorer.file_workspace.mode = FileWorkspaceMode::Terminal;
-        self.explorer.file_workspace.tmux_prefix_pending = false;
+        self.explorer.file_workspace.tmux_prefix_pending = None;
         self.explorer.file_workspace.explorer_keyboard_mode = false;
         self.explorer.focused = false;
         log::debug!("cosmos file workspace: returned to terminal");
@@ -2031,95 +2025,76 @@ impl TermWindow {
             }
             return true;
         }
-        if !self.explorer.file_workspace.visible() {
-            return false;
-        }
-
-        if self.explorer.file_workspace.tmux_prefix_pending {
-            self.explorer.file_workspace.tmux_prefix_pending = false;
-            if is_tmux_explorer_toggle_key(key, modifiers)
-                && self.tmux_file_workspace_preview_active()
-                && self.file_workspace_owns_active_context()
-            {
-                self.toggle_tmux_explorer_keyboard_mode();
+        if self.explorer.file_workspace.visible() {
+            if matches!((key, modifiers), (KeyCode::Char('\r'), Modifiers::SUPER)) {
+                if self.file_workspace_owns_active_context() {
+                    self.save_file_workspace();
+                }
                 return true;
             }
-            self.explorer
-                .file_workspace
-                .trace_test_state("tmux_key_passthrough");
-            return false;
-        }
-        if self.file_workspace_tmux_prefix_key_down(key, modifiers) {
-            return false;
-        }
-
-        if matches!((key, modifiers), (KeyCode::Char('\r'), Modifiers::SUPER)) {
-            if self.file_workspace_owns_active_context() {
-                self.save_file_workspace();
-            }
-            return true;
-        }
-        if matches!(
-            (key, modifiers),
-            (KeyCode::Char('e' | 'E'), Modifiers::SUPER)
-        ) {
-            if !self.file_workspace_owns_active_context() {
-                return true;
-            }
-            match self.explorer.file_workspace.mode {
-                FileWorkspaceMode::View => {
-                    self.blur_explorer();
-                    self.explorer.file_workspace.mode = FileWorkspaceMode::Edit;
-                    self.explorer.file_workspace.resume_mode = FileWorkspaceMode::Edit;
-                    self.explorer.file_workspace.cursor =
-                        self.explorer.file_workspace.content.len();
-                }
-                FileWorkspaceMode::Edit => {
-                    self.explorer.file_workspace.mode = FileWorkspaceMode::View;
-                    self.explorer.file_workspace.resume_mode = FileWorkspaceMode::View;
-                    self.explorer.file_workspace.rebuild_document();
-                }
-                _ => {}
-            }
-            self.explorer
-                .file_workspace
-                .trace_test_state("mode_changed");
-            self.update_title();
-            return true;
-        }
-        if self.explorer.file_workspace.dirty
-            && matches!(
+            if matches!(
                 (key, modifiers),
-                (KeyCode::Char('w' | 'W' | 'q' | 'Q'), Modifiers::SUPER)
-            )
-        {
-            self.explorer.file_workspace.error = Some(
-                "Unsaved changes blocked closing. Press Command+Return to save or Command+Shift+D to discard."
-                    .to_string(),
-            );
-            self.explorer
-                .file_workspace
-                .trace_test_state("dirty_close_blocked");
-            return true;
-        }
-        if matches!(
-            (key, modifiers),
-            (KeyCode::Char('d' | 'D'), mods) if mods == (Modifiers::SUPER | Modifiers::SHIFT)
-        ) {
-            if !self.file_workspace_owns_active_context() {
+                (KeyCode::Char('e' | 'E'), Modifiers::SUPER)
+            ) {
+                if !self.file_workspace_owns_active_context() {
+                    return true;
+                }
+                match self.explorer.file_workspace.mode {
+                    FileWorkspaceMode::View => {
+                        self.blur_explorer();
+                        self.explorer.file_workspace.mode = FileWorkspaceMode::Edit;
+                        self.explorer.file_workspace.resume_mode = FileWorkspaceMode::Edit;
+                        self.explorer.file_workspace.cursor =
+                            self.explorer.file_workspace.content.len();
+                    }
+                    FileWorkspaceMode::Edit => {
+                        self.explorer.file_workspace.mode = FileWorkspaceMode::View;
+                        self.explorer.file_workspace.resume_mode = FileWorkspaceMode::View;
+                        self.explorer.file_workspace.rebuild_document();
+                    }
+                    _ => {}
+                }
+                self.explorer
+                    .file_workspace
+                    .trace_test_state("mode_changed");
+                self.update_title();
                 return true;
             }
-            self.explorer.file_workspace.dirty = false;
-            if self.reconcile_file_workspace_context() {
+            if self.explorer.file_workspace.dirty
+                && matches!(
+                    (key, modifiers),
+                    (KeyCode::Char('w' | 'W' | 'q' | 'Q'), Modifiers::SUPER)
+                )
+            {
+                self.explorer.file_workspace.error = Some(
+                    "Unsaved changes blocked closing. Press Command+Return to save or Command+Shift+D to discard."
+                        .to_string(),
+                );
+                self.explorer
+                    .file_workspace
+                    .trace_test_state("dirty_close_blocked");
                 return true;
             }
-            if let Some(path) = self.explorer.file_workspace.active_path.clone() {
-                self.open_file_workspace_path(path);
-            } else {
-                self.return_to_terminal_workspace();
+            if matches!(
+                (key, modifiers),
+                (KeyCode::Char('d' | 'D'), mods) if mods == (Modifiers::SUPER | Modifiers::SHIFT)
+            ) {
+                if !self.file_workspace_owns_active_context() {
+                    return true;
+                }
+                self.explorer.file_workspace.dirty = false;
+                if self.reconcile_file_workspace_context() {
+                    return true;
+                }
+                if let Some(path) = self.explorer.file_workspace.active_path.clone() {
+                    self.open_file_workspace_path(path);
+                } else {
+                    self.return_to_terminal_workspace();
+                }
+                return true;
             }
-            return true;
         }
+
         // Preserve application/window/tab shortcuts such as protected
         // Command+W and Command+Q. File-workspace commands above are consumed;
         // all other Command chords continue through the normal input map.
@@ -2127,16 +2102,10 @@ impl TermWindow {
             return false;
         }
 
-        // A viewer attached to another pane is presentation state for that
-        // pane, not a window-wide input mode. The newly focused pane receives
-        // normal terminal input.
-        if !self.file_workspace_owns_active_context() {
-            return false;
-        }
-
-        // prefix+0 explicitly turns the Explorer into this tmux pane's
-        // keyboard surface. Only that mode reserves navigation keys; normal
-        // preview keeps every other key transparent to tmux.
+        // prefix+0 is a global third focus region alongside the numbered tmux
+        // panes. It owns only the documented Explorer navigation keys and is
+        // available even when the file workspace is hidden or owned by a
+        // different inner pane.
         if self.explorer.file_workspace.explorer_keyboard_mode {
             match explorer_keyboard_action(key, modifiers) {
                 Some(ExplorerKeyboardAction::Move(delta)) => self.explorer.move_selection(delta),
@@ -2150,6 +2119,17 @@ impl TermWindow {
                 window.invalidate();
             }
             return true;
+        }
+
+        if !self.explorer.file_workspace.visible() {
+            return false;
+        }
+
+        // A viewer attached to another pane is presentation state for that
+        // pane, not a window-wide input mode. The newly focused pane receives
+        // normal terminal input.
+        if !self.file_workspace_owns_active_context() {
+            return false;
         }
 
         // Preview is only a visual surface for an inner tmux pane. Keep the
@@ -2256,27 +2236,54 @@ impl TermWindow {
         key: &KeyCode,
         modifiers: Modifiers,
     ) -> bool {
-        if !self.explorer.file_workspace.visible() {
-            return false;
-        }
         let is_tmux_prefix = self
             .explorer
             .active_context
             .as_ref()
             .map(|context| {
-                context
-                    .tmux_prefixes
-                    .iter()
-                    .any(|prefix| tmux_key_matches_event(prefix, key, modifiers))
+                context.tmux_pane_id.is_some()
+                    && context
+                        .tmux_prefixes
+                        .iter()
+                        .any(|prefix| tmux_key_matches_event(prefix, key, modifiers))
             })
             .unwrap_or(false);
         if is_tmux_prefix {
-            self.explorer.file_workspace.tmux_prefix_pending = true;
+            self.explorer.file_workspace.tmux_prefix_pending =
+                Some((key.clone(), modifiers.remove_positional_mods()));
             self.explorer
                 .file_workspace
-                .trace_test_state("tmux_prefix_passthrough");
+                .trace_test_state("tmux_prefix_buffered");
             return true;
         }
+        false
+    }
+
+    pub fn take_file_workspace_tmux_prefix(&mut self) -> Option<(KeyCode, Modifiers)> {
+        self.explorer.file_workspace.tmux_prefix_pending.take()
+    }
+
+    pub fn file_workspace_tmux_command_key_down(
+        &mut self,
+        key: &KeyCode,
+        modifiers: Modifiers,
+    ) -> bool {
+        if is_tmux_explorer_toggle_key(key, modifiers) {
+            self.toggle_tmux_explorer_keyboard_mode();
+            return true;
+        }
+        // Any real tmux command selects or operates on a tmux region. Leave
+        // the global Explorer region before replaying the buffered prefix, so
+        // prefix+1 also works when pane 1 is already the workspace owner.
+        if self.explorer.file_workspace.explorer_keyboard_mode {
+            self.blur_explorer();
+            self.explorer
+                .file_workspace
+                .trace_test_state("explorer_keyboard_exited_for_tmux_command");
+        }
+        self.explorer
+            .file_workspace
+            .trace_test_state("tmux_key_passthrough");
         false
     }
 
@@ -3705,7 +3712,10 @@ fn explorer_prompt_overlay(
 
 #[cfg(test)]
 mod tests {
-    use super::{explorer_keyboard_action, is_tmux_explorer_toggle_key, ExplorerKeyboardAction};
+    use super::{
+        explorer_keyboard_action, is_tmux_explorer_toggle_key, tmux_key_matches_event,
+        ExplorerKeyboardAction,
+    };
     use ::window::{KeyCode, Modifiers};
 
     #[test]
@@ -3716,6 +3726,16 @@ mod tests {
         ));
         assert!(!is_tmux_explorer_toggle_key(
             &KeyCode::Char('1'),
+            Modifiers::NONE
+        ));
+        assert!(tmux_key_matches_event(
+            "S-BSpace",
+            &KeyCode::Char('\u{7f}'),
+            Modifiers::SHIFT
+        ));
+        assert!(!tmux_key_matches_event(
+            "S-BSpace",
+            &KeyCode::Char('\u{7f}'),
             Modifiers::NONE
         ));
         assert_eq!(

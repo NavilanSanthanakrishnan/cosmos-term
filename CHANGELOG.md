@@ -19,9 +19,11 @@ history remains available in `docs/changelog.md` and the retained Git history.
   key tables, window and pane commands, repeat bindings, and direct no-prefix
   bindings continue working; configured prefixes also remain available while
   editing.
-- Added pane-local Explorer keyboard navigation with `<tmux prefix> 0`,
-  W/S one-row movement, Shift+W/Shift+S five-row movement, Return activation,
-  and automatic focus release when the active tmux pane changes.
+- Added global Explorer keyboard navigation with `<tmux prefix> 0`, W/S
+  one-row movement, Shift+W/Shift+S five-row movement, and Return activation.
+  The prefix is buffered so 0 never leaves tmux waiting in its prefix table,
+  while every other command—including positional 1/2—exits navigation and is
+  replayed through tmux unchanged.
 - Made the five-row shortcuts accept macOS's normalized uppercase W/S events,
   where the character can retain the Shift meaning after the modifier flag is
   removed by the text-input pass.

@@ -83,13 +83,14 @@ explorer and using independent application/runtime identities.
   overriding current-folder scope.
 - A two-pane tmux session on a dedicated socket reports source `tmux` and
   follows tmux pane selection from one directory to another.
-- A visible tmux file workspace reserves `<prefix> 0` as an explicit,
-  pane-owner-bound Explorer keyboard mode. W/S move one row,
-  Shift+W/Shift+S move five, A/D and arrows collapse or expand, Return
-  activates the selected row, and Escape exits. Unknown keys and every other
-  prefix command still use the live tmux input path; focusing another tmux
-  pane releases Explorer mode instead of transferring or swapping the file
-  surface.
+- `<prefix> 0` is an explicit global Explorer keyboard region from any inner
+  tmux pane, including while the file workspace is hidden or owned elsewhere.
+  W/S move one row, Shift+W/Shift+S move five, A/D and arrows collapse or
+  expand, Return activates the selected row, and Escape exits. Cosmos buffers
+  the prefix until it sees the command: 0 is consumed entirely, while every
+  other prefix command leaves navigation, replays the exact prefix, and
+  continues through tmux. Positional prefix+1/2 therefore remain reliable
+  even when a command selects the pane that is already active.
 - Physical macOS Shift+W/S input is accepted both with an explicit Shift flag
   and in the uppercase-without-Shift form produced by the text-input pass.
   An isolated packaged build verified `.cargo` to `base91` as a five-row
@@ -103,6 +104,21 @@ explorer and using independent application/runtime identities.
   (`17e72d43b92d38fd0da649ce13e5c65edc8ca6294875f89cb2b410d6e8772044`).
   The disposable GUI and dedicated tmux server were removed; live Cosmos PID
   664 and the default tmux client `/dev/ttys000 0 %0` were unchanged.
+- The global three-region mapping was verified with the user's actual
+  `S-BSpace` prefix and positional 1/2 helper on a dedicated two-pane server.
+  From pane 2, prefix+0 entered Explorer navigation and W/Shift+S moved the
+  selection; prefix+1 selected the workspace owner, exited navigation, and
+  sent the next `s` to pane 1. The same-pane `2 → 0 → 2` sequence also exited
+  navigation and sent the next `s` to pane 2. With the file workspace hidden,
+  prefix+0 still entered navigation from pane 2. Captures are
+  `/tmp/cosmos-verified-captures/global-zero-from-pane2.png`
+  (`5b3ac37bd607dc69e855e9c7eec193e9083539557002c5e4eaecc47e1e584dc3`),
+  `prefix1-exits-navigation.png`
+  (`26da768f1e500019c58802c68a8d255dbebed6f0ea270547c36b96b998af262e`),
+  and `global-zero-workspace-hidden.png`
+  (`9bdb55de65beaed10e5534295366404c85bf347491e564a33746f82cf55f138b`).
+  The disposable app/server were removed; live Cosmos PID 34032 and default
+  tmux client `/dev/ttys000 2 %4` were unchanged.
 - The source fix is public on `main` at code commit
   `87c1773fe63d9a3eb2a13add684e95e83fc7f1be`. The commit uses `[skip ci]`;
   no pull request was opened and no GitHub workflow was invoked or rerun. The

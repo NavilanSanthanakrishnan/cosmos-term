@@ -268,14 +268,50 @@ impl super::TermWindow {
             }
         }
 
-        // Raw macOS key bindings can encode a configured tmux prefix before
-        // the normal file-workspace input path runs. Recognize that prefix at
-        // the same phase, while still allowing the existing key assignment to
-        // perform the terminal encoding. The next key is then passed through
-        // by file_workspace_key_down.
-        let tmux_prefix_passthrough = is_down
+        // Buffer a real tmux prefix for one key. prefix+0 is a Cosmos-owned
+        // Explorer region, so sending the prefix to tmux before seeing the
+        // command would leave tmux waiting in its prefix table. For every
+        // other command we replay the exact configured prefix first and then
+        // let the command key continue through the ordinary input path.
+        if is_down
             && only_key_bindings == OnlyKeyBindings::Yes
-            && self.file_workspace_tmux_prefix_key_down(keycode, raw_modifiers);
+            && self.file_workspace_tmux_prefix_key_down(keycode, raw_modifiers)
+        {
+            context.invalidate();
+            return true;
+        }
+
+        if is_down && only_key_bindings == OnlyKeyBindings::No {
+            if let Some((prefix_key, prefix_modifiers)) = self.take_file_workspace_tmux_prefix() {
+                if self.file_workspace_tmux_command_key_down(keycode, raw_modifiers) {
+                    context.invalidate();
+                    return true;
+                }
+
+                let prefix_handled = if let Some((entry, _)) =
+                    self.lookup_key(pane, &prefix_key, prefix_modifiers, OnlyKeyBindings::Yes)
+                {
+                    match self.perform_key_assignment(pane, &entry.action) {
+                        Ok(PerformAssignmentResult::Handled) => true,
+                        Err(err) => {
+                            log::error!("failed to replay tmux prefix: {err:#}");
+                            true
+                        }
+                        Ok(_) => false,
+                    }
+                } else {
+                    false
+                };
+                if !prefix_handled {
+                    if let Key::Code(term_key) = self.win_key_code_to_termwiz_key_code(&prefix_key)
+                    {
+                        if pane.key_down(term_key, prefix_modifiers).is_err() {
+                            log::error!("failed to replay tmux prefix key");
+                        }
+                    }
+                }
+            }
+        }
 
         if is_down {
             if only_key_bindings == OnlyKeyBindings::No {
@@ -337,15 +373,6 @@ impl super::TermWindow {
                     }
 
                     return true;
-                }
-            }
-
-            if tmux_prefix_passthrough {
-                if let Key::Code(term_key) = self.win_key_code_to_termwiz_key_code(keycode) {
-                    if pane.key_down(term_key, raw_modifiers).is_ok() {
-                        context.invalidate();
-                        return true;
-                    }
                 }
             }
         }

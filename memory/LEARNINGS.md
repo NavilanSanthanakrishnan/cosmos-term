@@ -183,12 +183,13 @@
   baseline for product-critical actions: synthetic `Command+Shift+S` and
   `Command+Shift+D` can lose the Command bit before raw-key routing. Prefer a
   tested single-modifier chord such as `Command+Return` for explicit save.
-- A tmux-aware sidebar keyboard mode must be explicit and owner-scoped. Reserve
-  a prefix command only while that pane's file surface is visible, intercept
-  only the documented navigation keys, pass unknown keys and every other
-  prefix command through, and release focus as soon as another pane becomes
-  active. Reusing ordinary Explorer focus is insufficient because mouse
-  selection and tmux input transparency have different semantics.
+- A tmux-aware sidebar keyboard mode is a separate global focus region, not
+  presentation ownership. Buffer the detected tmux prefix until the command
+  key arrives: consume prefix+0 entirely for Explorer focus, but replay the
+  exact configured prefix before every other command and leave Explorer mode
+  first. Sending the prefix eagerly and consuming only 0 leaves tmux waiting
+  in its prefix table; relying only on pane-change detection also makes a
+  same-pane positional command such as prefix+1 appear unresponsive.
 - The macOS text-input pass can encode physical Shift+W/S as uppercase W/S
   while omitting the Shift modifier. Explorer navigation must treat lowercase
   unmodified W/S as one-row movement and uppercase unmodified W/S as the
