@@ -112,6 +112,11 @@ The workspace starts empty: select a file from the left Explorer to load it.
 Changing to a pane with a different working directory resets a clean file
 workspace instead of carrying the old file into the new pane.
 
+Inside tmux, Cosmos reads the server's configured `prefix` and `prefix2`.
+Prefix commands continue through the file workspace, so pane-navigation
+bindings move focus normally and the workspace follows the newly active tmux
+pane. Ordinary preview/edit keystrokes remain owned by the file workspace.
+
 Markdown opens as a formatted document with headings, lists, quotes, code
 blocks, task markers, rules, and visible link destinations. Other UTF-8 text
 files open in a code-oriented view. The terminal or tmux pane remains alive

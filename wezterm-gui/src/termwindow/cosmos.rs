@@ -75,6 +75,53 @@ fn physical_to_logical(value: usize, dpi: usize) -> usize {
     ((value as f64 * 72. / dpi.max(1) as f64).round() as usize).max(1)
 }
 
+fn tmux_key_matches_event(binding: &str, key: &KeyCode, modifiers: Modifiers) -> bool {
+    let parts = binding.split('-').collect::<Vec<_>>();
+    let Some(key_name) = parts.last().copied().filter(|key| !key.is_empty()) else {
+        return false;
+    };
+    let mut expected = Modifiers::NONE;
+    for modifier in &parts[..parts.len().saturating_sub(1)] {
+        match *modifier {
+            "C" => expected |= Modifiers::CTRL,
+            "M" => expected |= Modifiers::ALT,
+            "S" => expected |= Modifiers::SHIFT,
+            _ => return false,
+        }
+    }
+    if modifiers.remove_positional_mods() != expected {
+        return false;
+    }
+
+    match key_name {
+        "BSpace" => matches!(key, KeyCode::Char('\u{8}' | '\u{7f}')),
+        "DC" | "Delete" => matches!(key, KeyCode::Char('\u{7f}')),
+        "Space" => matches!(key, KeyCode::Char(' ')),
+        "Enter" => matches!(key, KeyCode::Char('\r')),
+        "Escape" => matches!(key, KeyCode::Char('\u{1b}')),
+        "Tab" => matches!(key, KeyCode::Char('\t')),
+        "Up" => matches!(key, KeyCode::UpArrow),
+        "Down" => matches!(key, KeyCode::DownArrow),
+        "Left" => matches!(key, KeyCode::LeftArrow),
+        "Right" => matches!(key, KeyCode::RightArrow),
+        "Home" => matches!(key, KeyCode::Home),
+        "End" => matches!(key, KeyCode::End),
+        "PPage" => matches!(key, KeyCode::PageUp),
+        "NPage" => matches!(key, KeyCode::PageDown),
+        name => {
+            let mut chars = name.chars();
+            let Some(expected_char) = chars.next() else {
+                return false;
+            };
+            chars.next().is_none()
+                && matches!(
+                    key,
+                    KeyCode::Char(actual) if actual.eq_ignore_ascii_case(&expected_char)
+                )
+        }
+    }
+}
+
 const SIDEBAR_BG: RgbColor = RgbColor::new_8bpc(37, 37, 38);
 const DIVIDER: RgbColor = RgbColor::new_8bpc(43, 43, 43);
 const TEXT: RgbColor = RgbColor::new_8bpc(204, 204, 204);
@@ -233,7 +280,9 @@ struct FileWorkspaceUi {
     mode: FileWorkspaceMode,
     resume_mode: FileWorkspaceMode,
     owner_pane_id: Option<usize>,
+    owner_tmux_pane_id: Option<String>,
     owner_root: Option<PathBuf>,
+    tmux_prefix_pending: bool,
     active_path: Option<PathBuf>,
     content: String,
     document_lines: Vec<DocumentLine>,
@@ -254,7 +303,9 @@ impl Default for FileWorkspaceUi {
             mode: FileWorkspaceMode::Terminal,
             resume_mode: FileWorkspaceMode::View,
             owner_pane_id: None,
+            owner_tmux_pane_id: None,
             owner_root: None,
+            tmux_prefix_pending: false,
             active_path: None,
             content: String::new(),
             document_lines: vec![],
@@ -282,13 +333,15 @@ impl FileWorkspaceUi {
         self.request_id
     }
 
-    fn reset_for_context(&mut self, pane_id: usize, root: PathBuf) {
+    fn reset_for_context(&mut self, pane_id: usize, tmux_pane_id: Option<String>, root: PathBuf) {
         self.request_id = self.request_id.wrapping_add(1).max(1);
         self.pending_request = None;
         self.mode = FileWorkspaceMode::View;
         self.resume_mode = FileWorkspaceMode::View;
         self.owner_pane_id = Some(pane_id);
+        self.owner_tmux_pane_id = tmux_pane_id;
         self.owner_root = Some(root);
+        self.tmux_prefix_pending = false;
         self.active_path = None;
         self.content.clear();
         self.document_lines.clear();
@@ -1618,8 +1671,8 @@ impl TermWindow {
         if !self.explorer.file_workspace.visible() {
             return false;
         }
-        let pane_id = match self.explorer.active_context.as_ref() {
-            Some(context) => context.pane_id,
+        let (pane_id, tmux_pane_id) = match self.explorer.active_context.as_ref() {
+            Some(context) => (context.pane_id, context.tmux_pane_id.clone()),
             None => return false,
         };
         let root = match self.active_workspace_root() {
@@ -1627,6 +1680,7 @@ impl TermWindow {
             None => return false,
         };
         let context_changed = self.explorer.file_workspace.owner_pane_id != Some(pane_id)
+            || self.explorer.file_workspace.owner_tmux_pane_id != tmux_pane_id
             || self.explorer.file_workspace.owner_root.as_ref() != Some(&root);
         if !context_changed {
             return false;
@@ -1639,15 +1693,15 @@ impl TermWindow {
         } else {
             self.explorer
                 .file_workspace
-                .reset_for_context(pane_id, root);
+                .reset_for_context(pane_id, tmux_pane_id, root);
         }
         self.update_title();
         true
     }
 
     pub fn show_file_workspace(&mut self) {
-        let pane_id = match self.explorer.active_context.as_ref() {
-            Some(context) => context.pane_id,
+        let (pane_id, tmux_pane_id) = match self.explorer.active_context.as_ref() {
+            Some(context) => (context.pane_id, context.tmux_pane_id.clone()),
             None => {
                 self.explorer.file_workspace.error =
                     Some("Waiting for the active pane directory…".to_string());
@@ -1660,6 +1714,7 @@ impl TermWindow {
             None => return,
         };
         let context_changed = self.explorer.file_workspace.owner_pane_id != Some(pane_id)
+            || self.explorer.file_workspace.owner_tmux_pane_id != tmux_pane_id
             || self.explorer.file_workspace.owner_root.as_ref() != Some(&root);
         if context_changed {
             if self.explorer.file_workspace.dirty {
@@ -1670,7 +1725,7 @@ impl TermWindow {
             } else {
                 self.explorer
                     .file_workspace
-                    .reset_for_context(pane_id, root);
+                    .reset_for_context(pane_id, tmux_pane_id, root);
             }
         }
         self.explorer.file_workspace.mode = self.explorer.file_workspace.resume_mode;
@@ -1700,6 +1755,7 @@ impl TermWindow {
         };
         if let Some(context) = self.explorer.active_context.as_ref() {
             self.explorer.file_workspace.owner_pane_id = Some(context.pane_id);
+            self.explorer.file_workspace.owner_tmux_pane_id = context.tmux_pane_id.clone();
         }
         self.explorer.file_workspace.owner_root = Some(root.clone());
         let request_id = self.explorer.file_workspace.next_request_id();
@@ -1780,6 +1836,7 @@ impl TermWindow {
             self.explorer.file_workspace.resume_mode = self.explorer.file_workspace.mode;
         }
         self.explorer.file_workspace.mode = FileWorkspaceMode::Terminal;
+        self.explorer.file_workspace.tmux_prefix_pending = false;
         log::debug!("cosmos file workspace: returned to terminal");
         self.explorer.file_workspace.error = None;
         self.explorer
@@ -1805,6 +1862,17 @@ impl TermWindow {
             return true;
         }
         if !self.explorer.file_workspace.visible() {
+            return false;
+        }
+
+        if self.explorer.file_workspace.tmux_prefix_pending {
+            self.explorer.file_workspace.tmux_prefix_pending = false;
+            self.explorer
+                .file_workspace
+                .trace_test_state("tmux_key_passthrough");
+            return false;
+        }
+        if self.file_workspace_tmux_prefix_key_down(key, modifiers) {
             return false;
         }
 
@@ -1962,6 +2030,35 @@ impl TermWindow {
             }
             FileWorkspaceMode::Terminal => false,
         }
+    }
+
+    pub fn file_workspace_tmux_prefix_key_down(
+        &mut self,
+        key: &KeyCode,
+        modifiers: Modifiers,
+    ) -> bool {
+        if !self.explorer.file_workspace.visible() {
+            return false;
+        }
+        let is_tmux_prefix = self
+            .explorer
+            .active_context
+            .as_ref()
+            .map(|context| {
+                context
+                    .tmux_prefixes
+                    .iter()
+                    .any(|prefix| tmux_key_matches_event(prefix, key, modifiers))
+            })
+            .unwrap_or(false);
+        if is_tmux_prefix {
+            self.explorer.file_workspace.tmux_prefix_pending = true;
+            self.explorer
+                .file_workspace
+                .trace_test_state("tmux_prefix_passthrough");
+            return true;
+        }
+        false
     }
 
     pub fn explorer_key_down(&mut self, key: &KeyCode, modifiers: Modifiers) -> bool {

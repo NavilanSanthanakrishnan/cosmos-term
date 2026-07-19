@@ -218,11 +218,27 @@ explorer and using independent application/runtime identities.
   WezTerm processes were unchanged.
 - The exact signed binary installed at `/Applications/Cosmos Term.app` has
   SHA-256
-  `071eda76ab3a598dbaa1a53047e6365b75a1e30e47181d31b87d797d8a6eabe1`.
-  PID 69573 is open in the repository for the user. All old release backups,
-  disposable test bundles, and the generated `dist` bundle were deleted;
+  `b0b89963eb5038a0b56000c31221ee08f170041e8a0ec1652ed558d0d45f4686`.
+  Existing PID 71709 predates that on-disk replacement and was deliberately
+  left alive to preserve the user's work; the new binary takes effect on the
+  next normal relaunch. All old release backups, disposable test bundles, and
+  the generated `dist` bundle were deleted;
   `/Applications/Cosmos Term.app` is the only runnable Cosmos Term bundle
   outside the required source template.
+- While the file workspace is visible, Cosmos now reads the attached server's
+  configured `prefix` and `prefix2` and passes a recognized prefix plus exactly
+  one following tmux command through the raw-key pipeline. The active inner
+  `pane_id` is tracked separately from geometry and CWD. A dedicated two-pane
+  server using the user's `S-BSpace` prefix verified `prefix+d` moved the
+  workspace left → right and `prefix+a` moved it right → left without either
+  command appearing in a shell. Captures are
+  `/tmp/cosmos-tmux-nav-capture/03-prefix-d-final.png`
+  (`9cee3995315a3aeef1ffb46c81a29bd05069dbb3c60060b65ea244c66f2649ac`)
+  and `04-prefix-a-final.png`
+  (`e703a59b24a8ffaa2f7e74e3cf919b77492079a43cc1b7eff65eee31ccb0d38d`).
+  The workspace suite remains at 24 passing tests; full GUI/CLI/mux checks,
+  packaging, signature verification, plist validation, and
+  `git diff --check` pass.
 
 ## Verification commands
 
