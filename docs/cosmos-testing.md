@@ -218,6 +218,18 @@ Verify:
   prefix plus pane-navigation command in both directions; confirm tmux changes
   the active pane, the overlay follows it, and neither command key appears in
   either shell
+- open the tmux command prompt with `<prefix> :`, type a multi-character
+  command such as `select-pane -R`, and press Return; confirm it executes while
+  the file preview remains visible
+- enter copy mode with `<prefix> [`, confirm `#{pane_in_mode}` is `1`, then
+  press the configured copy-mode exit key and confirm it returns to `0`
+- create and revisit a tmux window with the normal window bindings; confirm
+  the active window and overlay context follow tmux
+- add a disposable `bind-key -n` binding only to the dedicated server and
+  confirm it executes without a prefix while preview remains visible
+- click a file or the Explorer surface so the sidebar is visually focused,
+  then confirm a disposable direct binding on an Explorer key such as `R`
+  still reaches tmux instead of triggering an Explorer action
 - the terminal remains responsive
 
 Stop only the test Cosmos process and run

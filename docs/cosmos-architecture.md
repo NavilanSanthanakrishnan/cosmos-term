@@ -131,13 +131,19 @@ tmux pane rendered normally while preventing the covered terminal's glyphs or
 cursor from bleeding through.
 
 The same tmux context request reads the server's global `prefix` and `prefix2`
-options and records the active inner `pane_id`. While the file workspace is
-visible, raw input recognizes a configured prefix before Cosmos's normal key
-map encodes it, then passes that prefix and exactly one following tmux command
-to the underlying terminal. This preserves custom pane-navigation bindings in
-both preview and edit modes without forwarding unrelated hidden shell input.
-The inner pane ID also distinguishes two tmux panes that share a CWD, while
-geometry changes from resizing alone do not reset the file workspace.
+options and records the active inner `pane_id`. In preview mode the file
+workspace is keyboard-transparent: after explicit Cosmos shortcuts are
+handled, every other raw key returns to the terminal input pipeline. Tmux
+therefore retains its command prompt, copy mode, key tables, repeat bindings,
+and direct no-prefix bindings even while the file surface is painted. The
+Explorer key handler observes the same gate because selecting a file can leave
+the sidebar visually focused.
+
+Edit mode deliberately owns text input. There, raw input still recognizes a
+configured prefix before Cosmos's normal key map encodes it and passes the
+prefix plus the next command key to tmux. The inner pane ID distinguishes two
+tmux panes that share a CWD, while geometry changes from resizing alone do not
+reset the file workspace.
 
 Context requests run approximately twice per second, independently from
 directory loading. This makes native focus and tmux pane changes visible
@@ -166,8 +172,10 @@ normal close/quit shortcuts until saved or deliberately discarded.
 
 The file surface is window state, not a mux pane. Terminal tabs, PTYs, tmux
 clients, splits, and scrollback remain allocated while it is visible.
-Escape from preview, `‹ TERMINAL`, or a terminal-tab click simply restores
-terminal painting and input.
+Escape from native preview, `‹ TERMINAL`, or a terminal-tab click simply
+restores terminal painting and input. In tmux preview, Escape remains tmux
+input; `Command+S` or the clickable terminal control restores terminal
+painting.
 
 ## Git decorations
 

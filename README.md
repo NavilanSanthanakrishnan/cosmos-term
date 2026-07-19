@@ -112,22 +112,26 @@ The workspace starts empty: select a file from the left Explorer to load it.
 Changing to a pane with a different working directory resets a clean file
 workspace instead of carrying the old file into the new pane.
 
-Inside tmux, Cosmos reads the server's configured `prefix` and `prefix2`.
-Prefix commands continue through the file workspace, so pane-navigation
-bindings move focus normally and the workspace follows the newly active tmux
-pane. Ordinary preview/edit keystrokes remain owned by the file workspace.
+Inside tmux, preview is a visual overlay rather than a separate keyboard
+surface. Every non-Cosmos key continues through the live tmux pane, including
+configured prefixes, command prompts, copy mode, key tables, repeat bindings,
+and direct `bind-key -n` bindings. The overlay follows the newly active tmux
+pane, and selecting a file does not let Explorer focus intercept tmux input.
+Edit mode owns text input deliberately, while the configured `prefix` and
+`prefix2` remain available for tmux commands.
 
 Markdown opens as a formatted document with headings, lists, quotes, code
 blocks, task markers, rules, and visible link destinations. Other UTF-8 text
 files open in a code-oriented view. The terminal or tmux pane remains alive
-underneath and receives no file-workspace keystrokes.
+underneath. Native preview owns its navigation keys; tmux preview passes all
+non-Cosmos keyboard input to that pane.
 
 | File-workspace key | Action |
 | --- | --- |
 | `Command+S` | Toggle between the terminal and file workspace |
 | `Command+E` | Toggle preview/edit mode |
 | `Command+Return` | Atomically save an edited file |
-| `Escape` | Leave edit mode; from preview, return to terminal |
+| `Escape` | Leave edit mode; from native preview, return to terminal |
 | `Command+Shift+D` | Discard edits and reload the file from disk |
 
 Clicking `‹ TERMINAL` or any terminal tab also returns immediately to the live

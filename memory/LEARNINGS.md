@@ -141,13 +141,17 @@
   origin and cell metrics, and keep file-workspace backgrounds and glyphs on
   the same late quad layer so covered terminal text and cursors cannot bleed
   through.
-- Tmux prefix passthrough must run at the raw-key binding phase. A configured
-  prefix such as `S-BSpace` may be converted by the application key map into a
-  terminal escape sequence before normal workspace input runs. Discover
-  `prefix` and `prefix2` with the existing tmux context command, recognize the
-  raw event before that lookup, preserve its normal encoding, and pass exactly
-  the next key through. Tracking `pane_id` separately prevents equal-CWD panes
-  from being treated as one context without resetting on ordinary resize.
+- A tmux file preview should be a visual overlay, not a competing keyboard
+  mode. After handling explicit product shortcuts, return all other preview
+  keys to the normal terminal pipeline so command prompts, copy mode, key
+  tables, repeat bindings, and `bind-key -n` bindings remain functional.
+  Apply the same bypass to sidebar key handling because clicking a file can
+  leave the Explorer focused after the preview opens.
+  Edit mode still needs raw-prefix recognition because it intentionally owns
+  text: a configured prefix such as `S-BSpace` may otherwise be converted by
+  the application key map before workspace input runs. Tracking `pane_id`
+  separately prevents equal-CWD panes from being treated as one context
+  without resetting on ordinary resize.
 - Keep recursive file search, canonicalized load, and atomic save together on
   an on-demand worker. Canonicalize both root and target, reject paths outside
   the active root, cap file size and search work, avoid symlink traversal, and
