@@ -6,9 +6,9 @@ Cosmos Term is a direct WezTerm fork with a native left-side workspace
 Explorer. The terminal engine remains WezTerm: PTYs, tabs, splits, mux domains,
 rendering, fonts, input handling, and Lua configuration continue to use the
 existing implementation. The Explorer and file workspace are composed into
-the same native window and render pipeline. File mode temporarily replaces
-right-side terminal painting; it never replaces, restarts, or detaches the
-underlying terminal/tmux pane.
+the same native window and render pipeline. File mode overlays only the
+focused native pane's bounds or the focused inner tmux pane's cell geometry;
+it never replaces, restarts, or detaches the underlying terminal/tmux pane.
 
 Cosmos deliberately avoids an Electron wrapper or separate editor process.
 Its file workspace is a bounded native viewer/editor for quick inspection and
@@ -28,7 +28,8 @@ This crate owns UI-independent workspace behavior:
 - workspace-confined UTF-8 file loading
 - revision-checked, permission-preserving atomic text saves
 - row generation for expanded directories
-- pane-context resolution for native panes and tmux
+- pane-context resolution for native panes and tmux, including active tmux
+  pane geometry
 - non-blocking Git status snapshots and porcelain parsing
 - read-only Codex usage snapshots and native active-process counting
 - native system-wide CPU and occupied-memory snapshots
@@ -63,8 +64,9 @@ The native window adapter owns:
 - mouse hit targets, scrolling, divider drag, and row activation
 - keyboard navigation and root prompts
 - spawning selected directories into tabs or splits
-- switching the right-side surface between the live terminal, an initially
-  empty file workspace, formatted Markdown/text preview, and text edit mode
+- switching only the focused native/tmux pane surface between the live
+  terminal, an initially empty file workspace, formatted Markdown/text
+  preview, and text edit mode
 - file-workspace mouse/keyboard routing, document scrolling, line-numbered
   editing, dirty state, and native mode/path header
 - a native Code OSS Dark Modern status bar that reserves 22 logical pixels
@@ -111,7 +113,8 @@ foreground process and TTY are also inspected. When the foreground process is
 `tmux`, Cosmos Term runs:
 
 ```sh
-tmux display-message -p -t <client-tty> "#{pane_current_path}"
+tmux display-message -p -t <client-tty> \
+  "#{pane_current_path}\x1f#{pane_left}\x1f#{pane_top}\x1f#{pane_width}\x1f#{pane_height}"
 ```
 
 The process inherits the GUI's `TMUX` environment and therefore queries the
@@ -120,6 +123,12 @@ process's full executable path when available, so a Finder-launched GUI does
 not depend on Homebrew being present in its reduced `PATH`. If the query
 fails, the explorer keeps the terminal usable, falls back to reported or
 last-known context, and displays the error in the sidebar.
+
+The returned cell geometry is translated through the outer WezTerm pane's
+pixel origin and cell metrics. The file surface is then painted as an opaque,
+late overlay inside only that rectangle. This keeps every inactive native or
+tmux pane rendered normally while preventing the covered terminal's glyphs or
+cursor from bleeding through.
 
 Context requests run approximately twice per second, independently from
 directory loading. This makes native focus and tmux pane changes visible

@@ -10,6 +10,8 @@ history remains available in `docs/changelog.md` and the retained Git history.
 - Added a pane-aware `Command+S` terminal/file-workspace toggle and
   click-to-open Explorer files; the file workspace starts with no selected
   file and has no search surface.
+- Scoped the file-workspace overlay to the focused native pane or exact active
+  tmux pane rectangle, leaving every other pane live and visible.
 - Added formatted Markdown preview, UTF-8 text preview, line-numbered editing,
   native path/mode navigation, and immediate terminal return.
 - Added 2 MiB file limits, workspace-boundary enforcement, atomic saves,

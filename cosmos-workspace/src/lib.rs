@@ -615,22 +615,34 @@ pub struct PaneContext {
     pub workspace_root: Option<PathBuf>,
     pub foreground_process: Option<String>,
     pub source: ContextSource,
+    pub tmux_geometry: Option<TmuxPaneGeometry>,
     pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TmuxPaneGeometry {
+    pub left: usize,
+    pub top: usize,
+    pub width: usize,
+    pub height: usize,
 }
 
 impl PaneContext {
     pub fn resolve(request: PaneContextRequest) -> Self {
         let mut cwd = None;
         let mut source = ContextSource::Unknown;
+        let mut tmux_geometry = None;
         let mut error = None;
 
         if process_is_tmux(request.foreground_process.as_deref()) {
             if let Some(tty_name) = request.tty_name.as_deref() {
-                match tmux_current_path(
+                match tmux_pane_context(
                     tty_name,
                     request.foreground_process.as_deref().unwrap_or("tmux"),
                 ) {
-                    Ok(path) => {
+                    Ok(context) => {
+                        tmux_geometry = Some(context.geometry);
+                        let path = context.path;
                         cwd = Some(path);
                         source = ContextSource::Tmux;
                     }
@@ -669,6 +681,7 @@ impl PaneContext {
             workspace_root,
             foreground_process: request.foreground_process,
             source,
+            tmux_geometry,
             error,
         }
     }
@@ -681,25 +694,57 @@ pub fn process_is_tmux(process: Option<&str>) -> bool {
         .unwrap_or(false)
 }
 
-pub fn tmux_current_path(tty_name: &str, tmux_executable: &str) -> Result<PathBuf, String> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TmuxPaneContext {
+    pub path: PathBuf,
+    pub geometry: TmuxPaneGeometry,
+}
+
+fn parse_tmux_pane_context(value: &str) -> Result<TmuxPaneContext, String> {
+    let mut fields = value.trim_end_matches(['\r', '\n']).split('\u{1f}');
+    let path = fields.next().unwrap_or_default();
+    if path.is_empty() {
+        return Err("tmux returned an empty pane path".to_string());
+    }
+    let parse_dimension = |name: &str, value: Option<&str>| {
+        value
+            .ok_or_else(|| format!("tmux omitted {name}"))?
+            .parse::<usize>()
+            .map_err(|err| format!("invalid tmux {name}: {err}"))
+    };
+    let left = parse_dimension("pane_left", fields.next())?;
+    let top = parse_dimension("pane_top", fields.next())?;
+    let width = parse_dimension("pane_width", fields.next())?;
+    let height = parse_dimension("pane_height", fields.next())?;
+    if width == 0 || height == 0 {
+        return Err("tmux returned an empty pane geometry".to_string());
+    }
+    Ok(TmuxPaneContext {
+        path: PathBuf::from(path),
+        geometry: TmuxPaneGeometry {
+            left,
+            top,
+            width,
+            height,
+        },
+    })
+}
+
+pub fn tmux_pane_context(tty_name: &str, tmux_executable: &str) -> Result<TmuxPaneContext, String> {
     let output = Command::new(tmux_executable)
         .args([
             "display-message",
             "-p",
             "-t",
             tty_name,
-            "#{pane_current_path}",
+            "#{pane_current_path}\u{1f}#{pane_left}\u{1f}#{pane_top}\u{1f}#{pane_width}\u{1f}#{pane_height}",
         ])
         .output()
         .map_err(|err| format!("unable to query tmux: {err}"))?;
     if !output.status.success() {
         return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
     }
-    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if path.is_empty() {
-        return Err("tmux returned an empty pane path".to_string());
-    }
-    Ok(PathBuf::from(path))
+    parse_tmux_pane_context(&String::from_utf8_lossy(&output.stdout))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2058,6 +2103,24 @@ mod tests {
         assert!(process_is_tmux(Some("tmux")));
         assert!(!process_is_tmux(Some("/bin/zsh")));
         assert!(!process_is_tmux(None));
+    }
+
+    #[test]
+    fn parses_tmux_path_and_active_pane_geometry() {
+        let context =
+            parse_tmux_pane_context("/tmp/cosmos project\u{1f}41\u{1f}3\u{1f}80\u{1f}24\n")
+                .unwrap();
+        assert_eq!(context.path, PathBuf::from("/tmp/cosmos project"));
+        assert_eq!(
+            context.geometry,
+            TmuxPaneGeometry {
+                left: 41,
+                top: 3,
+                width: 80,
+                height: 24,
+            }
+        );
+        assert!(parse_tmux_pane_context("/tmp\u{1f}0\u{1f}0\u{1f}0\u{1f}24").is_err());
     }
 
     #[test]

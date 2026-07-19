@@ -131,9 +131,16 @@
   Preserve upstream licensing and history, but do not let obsolete upstream
   automation publish or mutate the fork under the wrong product assumptions.
 - A terminal-integrated file workspace should be presentation state, not a
-  replacement mux pane. Suppress terminal painting and route input while the
-  file surface is visible, but retain the original pane and its processes so
-  returning is immediate and tmux state is never reconstructed.
+  replacement mux pane. Continue painting all terminal panes, then cover only
+  the active pane rectangle with a late opaque file-workspace surface and
+  route input there. Retain the original pane and its processes so returning
+  is immediate and tmux state is never reconstructed.
+- Pane-aware tmux presentation requires geometry as well as CWD. Query
+  `pane_left`, `pane_top`, `pane_width`, and `pane_height` with
+  `pane_current_path`, translate those cells through the outer native pane's
+  origin and cell metrics, and keep file-workspace backgrounds and glyphs on
+  the same late quad layer so covered terminal text and cursors cannot bleed
+  through.
 - Keep recursive file search, canonicalized load, and atomic save together on
   an on-demand worker. Canonicalize both root and target, reject paths outside
   the active root, cap file size and search work, avoid symlink traversal, and
