@@ -208,9 +208,12 @@ explorer and using independent application/runtime identities.
   SHA-256 `0ad853d88dd45511ab71cb7676e6434d150db85d96794d088d7b2a990b532f0a`).
   Common README HTML wrappers and badges are suppressed or converted into
   native headings, HTML whitespace is normalized, and Markdown tables render
-  as separated monospaced rows. The initially installed candidate PID 95283
-  remains running until the user completes the protected quit for this final
-  replacement.
+  as separated monospaced rows. The final bundle is installed at
+  `/Applications/Cosmos Term.app`; its GUI hash exactly matches the staged
+  candidate. Installed PID 61181 launched in the repository, `Command+P`
+  produced the native `Quick Open — Cosmos Term` window state, opening
+  `docs/cosmos-architecture.md` produced the formatted Preview state, and the
+  same process remained alive throughout.
 
 ## Verification commands
 
