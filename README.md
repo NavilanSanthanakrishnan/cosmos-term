@@ -40,7 +40,7 @@ window while preserving the terminal as the primary workspace.
 | Exact folder scope | Shows only the active pane's current directory |
 | Code OSS styling | Dark Modern colors, Seti file icons, native tree geometry |
 | Live filesystem | Lazy reads, non-recursive watches, Git decorations |
-| Native file workspace | Quick Open, formatted Markdown, text editing, safe saves |
+| Native file workspace | Pane-aware toggle, formatted Markdown, text editing, safe saves |
 | Native terminal core | WezTerm rendering, tabs, splits, config, and mux |
 | Local status | Codex usage, loop count, CPU, and RAM without a daemon |
 | Process isolation | Separate app identity, config, state, sockets, and protocol |
@@ -106,10 +106,11 @@ returns keyboard focus to that pane.
 
 ## File workspace
 
-`Command+P` switches the right side from the live terminal to Quick Open.
-Search results are limited and loaded by an on-demand worker, so recursive
-filesystem work never runs in the renderer. Select a result with the mouse or
-arrow keys and press Return.
+`Command+S` switches the right side between the live terminal and a file
+workspace tied to the focused native or tmux pane. The workspace starts empty:
+select a file from the left Explorer to load it. Changing to a pane with a
+different working directory resets a clean file workspace instead of carrying
+the old file into the new pane.
 
 Markdown opens as a formatted document with headings, lists, quotes, code
 blocks, task markers, rules, and visible link destinations. Other UTF-8 text
@@ -118,10 +119,10 @@ underneath and receives no file-workspace keystrokes.
 
 | File-workspace key | Action |
 | --- | --- |
-| `Command+P` | Open or return to Quick Open |
+| `Command+S` | Toggle between the terminal and file workspace |
 | `Command+E` | Toggle preview/edit mode |
-| `Command+S` | Atomically save an edited file |
-| `Escape` | Leave search/edit focus; from preview, return to terminal |
+| `Command+Return` | Atomically save an edited file |
+| `Escape` | Leave edit mode; from preview, return to terminal |
 | `Command+Shift+D` | Discard edits and reload the file from disk |
 
 Clicking `‹ TERMINAL` or any terminal tab also returns immediately to the live
@@ -183,7 +184,7 @@ Cosmos keeps product code close to explicit integration seams:
 
 ```text
 cosmos-workspace
-  directory cache · file search/load/save · pane context · watchers · status
+  directory cache · file load/save · pane context · watchers · status
           │ non-blocking worker responses
           ▼
 wezterm-gui/src/termwindow/cosmos.rs

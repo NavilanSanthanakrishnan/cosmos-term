@@ -147,3 +147,12 @@
   document lines. Rebuild the cache only when content or viewport columns
   change; wrapping prose every paint is avoidable renderer work, while code
   should remain unwrapped and monospace.
+- Treat a file workspace toggle and a file picker as separate product
+  concepts. If the Explorer is the sole picker, entering file mode should
+  create a blank pane-context-bound surface and never infer or search for a
+  file. Reconcile both native pane identity and resolved tmux CWD; reset only
+  clean state, and retain dirty buffers until the user saves or discards them.
+- Avoid relying on multi-modifier character chords in this macOS input
+  baseline for product-critical actions: synthetic `Command+Shift+S` and
+  `Command+Shift+D` can lose the Command bit before raw-key routing. Prefer a
+  tested single-modifier chord such as `Command+Return` for explicit save.
