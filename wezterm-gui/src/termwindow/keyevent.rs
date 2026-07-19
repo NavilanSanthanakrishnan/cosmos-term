@@ -268,6 +268,15 @@ impl super::TermWindow {
             }
         }
 
+        // Raw macOS key bindings can encode a configured tmux prefix before
+        // the normal file-workspace input path runs. Recognize that prefix at
+        // the same phase, while still allowing the existing key assignment to
+        // perform the terminal encoding. The next key is then passed through
+        // by file_workspace_key_down.
+        let tmux_prefix_passthrough = is_down
+            && only_key_bindings == OnlyKeyBindings::Yes
+            && self.file_workspace_tmux_prefix_key_down(keycode, raw_modifiers);
+
         if is_down {
             if only_key_bindings == OnlyKeyBindings::No {
                 if let Some(modal) = self.get_modal() {
@@ -328,6 +337,15 @@ impl super::TermWindow {
                     }
 
                     return true;
+                }
+            }
+
+            if tmux_prefix_passthrough {
+                if let Key::Code(term_key) = self.win_key_code_to_termwiz_key_code(keycode) {
+                    if pane.key_down(term_key, raw_modifiers).is_ok() {
+                        context.invalidate();
+                        return true;
+                    }
                 }
             }
         }
