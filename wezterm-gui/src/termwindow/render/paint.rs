@@ -246,22 +246,24 @@ impl crate::TermWindow {
             .context("filled_rectangle for window background")?;
         }
 
-        for pos in panes {
-            if pos.is_active {
-                self.update_text_cursor(&pos);
-                if focused {
-                    pos.pane.advise_focus();
-                    mux::Mux::get().record_focus_for_current_identity(pos.pane.pane_id());
+        if !self.file_workspace_visible() {
+            for pos in panes {
+                if pos.is_active {
+                    self.update_text_cursor(&pos);
+                    if focused {
+                        pos.pane.advise_focus();
+                        mux::Mux::get().record_focus_for_current_identity(pos.pane.pane_id());
+                    }
                 }
+                self.paint_pane(&pos, &mut layers).context("paint_pane")?;
             }
-            self.paint_pane(&pos, &mut layers).context("paint_pane")?;
-        }
 
-        if let Some(pane) = self.get_active_pane_or_overlay() {
-            let splits = self.get_splits();
-            for split in &splits {
-                self.paint_split(&mut layers, split, &pane)
-                    .context("paint_split")?;
+            if let Some(pane) = self.get_active_pane_or_overlay() {
+                let splits = self.get_splits();
+                for split in &splits {
+                    self.paint_split(&mut layers, split, &pane)
+                        .context("paint_split")?;
+                }
             }
         }
 
@@ -269,6 +271,8 @@ impl crate::TermWindow {
             self.paint_tab_bar(&mut layers).context("paint_tab_bar")?;
         }
 
+        self.paint_file_workspace(&mut layers)
+            .context("paint_file_workspace")?;
         self.paint_explorer(&mut layers).context("paint_explorer")?;
         self.paint_status_bar(&mut layers)
             .context("paint_status_bar")?;

@@ -12,9 +12,11 @@ git diff --check
 
 The workspace tests cover legacy follow-state compatibility, root matching and
 deduplication, folder-scoped row isolation, layout migration, Git porcelain
-parsing, directory sorting/filtering, persistence, structured Codex usage
-parsing, reset selection, exact executable-name process detection, CPU tick
-delta calculation, RAM label formatting, and native macOS capacity reads.
+parsing, directory sorting/filtering, persistence, bounded file search,
+workspace-confined load/save, atomic-save cleanup, external-change conflict
+detection, structured Codex usage parsing, reset selection, exact
+executable-name process detection, CPU tick delta calculation, RAM label
+formatting, and native macOS capacity reads.
 
 ## Release bundle
 
@@ -138,32 +140,44 @@ Use only panes created in Cosmos Term.
     the command reaches the shell and no explorer action runs.
 10. Press `Command+Shift+E` and confirm the sidebar remains visible and no `E`
     reaches the shell.
-11. In a Git worktree, modify a visible file and confirm a right-aligned `M`
+11. Press `Command+P` and confirm Quick Open replaces only the right-side
+    rendering. Search for a Markdown file, open it, and confirm formatted
+    headings, lists, quotes, code, and link destinations. Click `‹ TERMINAL`
+    and confirm the original shell/tmux process, screen, and scrollback return.
+12. Click a visible UTF-8 file, enter edit mode with `Command+E`, make a
+    disposable change, and save with `Command+S`. Confirm permissions are
+    unchanged and no `.cosmos-save-*` file remains. Modify a second disposable
+    copy externally after opening it and confirm Cosmos refuses to overwrite
+    the newer revision.
+13. Leave an edit dirty and confirm `Command+W` and `Command+Q` are blocked.
+    Save it, or deliberately discard it with `Command+Shift+D`, then confirm
+    normal protected-close behavior resumes.
+14. In a Git worktree, modify a visible file and confirm a right-aligned `M`
     appears and refreshes without blocking terminal input.
-12. Press `Command+W` and confirm the in-app `COSMOS TERM CLOSE LOCK` screen
+15. Press `Command+W` and confirm the in-app `COSMOS TERM CLOSE LOCK` screen
     appears with no `tmux Manager` dialog or notification. Type a disposable
     value and confirm only bullets render, then press Escape and confirm the
     tab and its processes remain intact. In a disposable test tab backed by a
     dedicated tmux socket and temporary close-lock credential, enter the
     correct passphrase and confirm the workspace is saved before the tab and
     all of its panes close.
-13. Capture native window screenshots on 72 DPI and 144 DPI displays. Confirm
+16. Capture native window screenshots on 72 DPI and 144 DPI displays. Confirm
     the Explorer remains 520 logical pixels wide with a 35 px title, 22 px
     rows, 13/15 px text, and exact `#252526` background and `#37373D` inactive
     selection pixels on the 72 DPI reference display.
-14. While the terminal repaints under rapid input, confirm cached expanded
+17. While the terminal repaints under rapid input, confirm cached expanded
     directories are not re-read. Expand an uncached folder and confirm its
     worker result appears on the 50 ms service-response cycle; watcher and
     periodic refreshes must remain the only background rescan paths.
-15. Confirm the bottom bar reports the current Codex usage window, nearest
+18. Confirm the bottom bar reports the current Codex usage window, nearest
     reset, and active loop count. Start one disposable `codex` executable and
     confirm the count increments within two seconds; stop it and confirm the
     count decrements without restarting Cosmos.
-16. Compare the footer's system-wide CPU and occupied/total RAM values with
+19. Compare the footer's system-wide CPU and occupied/total RAM values with
     Activity Monitor while idle and under a short disposable load. Confirm the
     rolling view updates within twelve seconds and remains legible at the
     minimum window width.
-17. Inspect Cosmos child processes while the footer updates. Confirm there is
+20. Inspect Cosmos child processes while the footer updates. Confirm there is
     no status helper, shell loop, daemon, or repeated `ps`/`pgrep` process.
     Updating the active rollout should not trigger a full session-tree walk;
     broad discovery is rate-limited to once per 15 seconds.
