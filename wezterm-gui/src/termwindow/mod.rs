@@ -85,7 +85,7 @@ mod selection;
 pub mod spawn;
 pub mod webgpu;
 use crate::spawn::SpawnWhere;
-use cosmos::{ExplorerPromptKind, ExplorerUi, ExplorerUiItem};
+use cosmos::{ExplorerPromptKind, ExplorerUi, ExplorerUiItem, FileWorkspaceUiItem};
 use prevcursor::PrevCursorPos;
 
 const ATLAS_SIZE: usize = 128;
@@ -163,6 +163,7 @@ pub enum UIItemType {
     BelowScrollThumb,
     Split(PositionedSplit),
     Explorer(ExplorerUiItem),
+    FileWorkspace(FileWorkspaceUiItem),
     StatusBar,
 }
 
@@ -478,6 +479,9 @@ impl TermWindow {
     }
 
     fn close_requested(&mut self, window: &Window) {
+        if self.block_dirty_file_workspace_window_close() {
+            return;
+        }
         let mux = Mux::get();
         match self.config.window_close_confirmation {
             WindowCloseConfirmation::NeverPrompt => {
@@ -1887,6 +1891,22 @@ impl TermWindow {
             return;
         }
 
+        // Shell integrations and the CLI test harness can request the same
+        // native file-workspace transition as Command+P/sidebar activation.
+        // The loader still canonicalizes the path and rejects anything outside
+        // the active pane's exact workspace root.
+        if name == "COSMOS_FILE_OPEN" {
+            let path = std::path::PathBuf::from(&value);
+            let path = if path.is_absolute() {
+                path
+            } else {
+                self.active_workspace_root()
+                    .map(|root| root.join(&path))
+                    .unwrap_or(path)
+            };
+            self.open_file_workspace_path(path);
+        }
+
         let window = GuiWin::new(self);
         let pane = match mux.get_pane(pane_id) {
             Some(pane) => mux_lua::MuxPane(pane.pane_id()),
@@ -2046,6 +2066,7 @@ impl TermWindow {
                 }
             }
         };
+        let title = self.file_workspace_window_title().unwrap_or(title);
 
         if let Some(window) = self.window.as_ref() {
             window.set_title(&title);
@@ -2508,6 +2529,10 @@ impl TermWindow {
             if modal.perform_assignment(assignment, self) {
                 return Ok(PerformAssignmentResult::Handled);
             }
+        }
+
+        if self.block_dirty_file_workspace_close(assignment) {
+            return Ok(PerformAssignmentResult::Handled);
         }
 
         match pane.perform_assignment(assignment) {

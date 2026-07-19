@@ -164,9 +164,10 @@ explorer and using independent application/runtime identities.
   2486 × 1702 at Retina resolution).
 - The public README screenshot is
   `docs/screenshots/cosmos-term-workbench.png`
-  (`5f01f7764ecd13d58bff58652029111840aa5d426ccd1236acf6141dee7b5084`,
-  2912 × 1614). It shows the CPU/RAM footer and was captured from an isolated
-  packaged process; the
+  (`50d745b0b1769e5ec7f2cb4393e1fef954db969c755484b0206176b03678da12`,
+  1148 × 807). It shows the native formatted architecture Markdown workspace,
+  Explorer, terminal-return control, edit control, tabs, and CPU/RAM footer.
+  It was captured from an isolated packaged process; the
   installed Cosmos PID and default tmux clients were unchanged before and
   after the capture.
 - Public prerelease `v0.1.0-alpha.1` targets merge commit
@@ -175,6 +176,44 @@ explorer and using independent application/runtime identities.
   `ce0f160ebd6747a8bb40c3b115f6478b8cb22c9acb26b53b5b316ad7fe22cff8`.
   GitHub reports both the ZIP and portable checksum assets uploaded, and the
   archive passed `unzip -t`.
+- A native file workspace is implemented in the release candidate. `Command+P`
+  replaces only the right-side presentation with bounded Quick Open while the
+  terminal/tmux pane remains alive underneath. Explorer file activation uses
+  the same native loader. Markdown is rendered with headings, lists, quotes,
+  code, rules, task markers, visible link destinations, and width-aware prose
+  wrapping; other UTF-8 files use a code-oriented view.
+- `Command+E` toggles preview/edit, `Command+S` performs a same-directory
+  atomic save, Escape moves from edit to preview and preview to the live
+  terminal, and `Command+Shift+D` deliberately discards edits. The header
+  identifies the active path and exposes `‹ TERMINAL`, `EDIT`, and `PREVIEW`
+  controls. File loads are limited to 2 MiB, reject binary/out-of-root paths,
+  and saves refuse to overwrite a file whose revision changed externally.
+- Search, load, and save run through a fifth on-demand workspace worker. It
+  sleeps on its channel while idle, caps search at 20,000 visited entries and
+  200 results, excludes `.git` and `node_modules`, and does not follow
+  symlinks. The release test process had no new helper/daemon; its only child
+  was the requested shell and an idle sample read 0.0% CPU.
+- The isolated signed release completed open → edit → type → atomic save →
+  preview → terminal with the GUI process continuously alive. The workspace
+  suite now has 23 passing tests, including out-of-root rejection, atomic
+  save cleanup, and external-revision conflict. Full GUI/CLI/mux checks,
+  release packaging, strict signature verification, plist validation, and
+  `git diff --check` pass. The repository-wide format check still reports only
+  the pre-existing `window/src/os/macos/app.rs` difference.
+- Before installation, the current protected-close app was copied to
+  `~/Applications/Cosmos Term Releases/Cosmos Term-command-w-protected-2026-07-18.app`
+  (GUI SHA-256 `f0a610f933616a6c5ab8e656c8e2a76492e01b8a9b965ed7e6cf1a0155f8d2ca`).
+  The final signed candidate is staged as
+  `Cosmos Term-file-workspace-final-2026-07-18.app` in the same directory (GUI
+  SHA-256 `0ad853d88dd45511ab71cb7676e6434d150db85d96794d088d7b2a990b532f0a`).
+  Common README HTML wrappers and badges are suppressed or converted into
+  native headings, HTML whitespace is normalized, and Markdown tables render
+  as separated monospaced rows. The final bundle is installed at
+  `/Applications/Cosmos Term.app`; its GUI hash exactly matches the staged
+  candidate. Installed PID 61181 launched in the repository, `Command+P`
+  produced the native `Quick Open — Cosmos Term` window state, opening
+  `docs/cosmos-architecture.md` produced the formatted Preview state, and the
+  same process remained alive throughout.
 
 ## Verification commands
 

@@ -4,8 +4,8 @@ use ring::pbkdf2;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::ffi::OsStr;
-use std::fs::{self, File};
-use std::io::{self, Read, Seek, SeekFrom};
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -17,6 +17,9 @@ pub const DEFAULT_SIDEBAR_WIDTH: usize = 520;
 pub const MIN_SIDEBAR_WIDTH: usize = 240;
 pub const MAX_SIDEBAR_WIDTH: usize = 840;
 pub const MAX_DIRECTORY_ENTRIES: usize = 5_000;
+pub const MAX_FILE_SEARCH_ENTRIES: usize = 20_000;
+pub const MAX_FILE_SEARCH_RESULTS: usize = 200;
+pub const MAX_EDITABLE_FILE_BYTES: u64 = 2 * 1024 * 1024;
 const CODEX_ROLLOUT_INITIAL_TAIL_BYTES: u64 = 512 * 1024;
 const CODEX_ROLLOUT_MAX_TAIL_BYTES: u64 = 8 * 1024 * 1024;
 const CODEX_ROLLOUT_DISCOVERY_INTERVAL: Duration = Duration::from_secs(15);
@@ -1347,6 +1350,9 @@ pub enum ServiceResponse {
     ContextResolved(PaneContext),
     GitStatusLoaded(GitStatusSnapshot),
     WorkspaceStatusLoaded(WorkspaceStatusSnapshot),
+    FileSearchCompleted(FileSearchResult),
+    FileLoaded(FileLoadResult),
+    FileSaved(FileSaveResult),
     DirectoryChanged(Vec<PathBuf>),
     WatcherError(String),
 }
@@ -1356,10 +1362,283 @@ enum ContextRequest {
     WorkspaceStatus(PathBuf),
 }
 
+#[derive(Debug, Clone)]
+pub enum FileRequest {
+    Search {
+        request_id: u64,
+        root: PathBuf,
+        query: String,
+    },
+    Load {
+        request_id: u64,
+        root: PathBuf,
+        path: PathBuf,
+    },
+    Save {
+        request_id: u64,
+        root: PathBuf,
+        path: PathBuf,
+        content: String,
+        expected_revision: Option<FileRevision>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileRevision {
+    pub length: u64,
+    pub modified_nanos: u128,
+}
+
+fn file_revision(metadata: &fs::Metadata) -> FileRevision {
+    FileRevision {
+        length: metadata.len(),
+        modified_nanos: metadata
+            .modified()
+            .ok()
+            .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0),
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileSearchResult {
+    pub request_id: u64,
+    pub root: PathBuf,
+    pub query: String,
+    pub paths: Vec<PathBuf>,
+    pub truncated: bool,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileLoadResult {
+    pub request_id: u64,
+    pub path: PathBuf,
+    pub content: Option<String>,
+    pub revision: Option<FileRevision>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileSaveResult {
+    pub request_id: u64,
+    pub path: PathBuf,
+    pub revision: Option<FileRevision>,
+    pub error: Option<String>,
+}
+
+fn canonical_workspace_path(root: &Path, path: &Path) -> io::Result<(PathBuf, PathBuf)> {
+    let root = root.canonicalize()?;
+    let path = path.canonicalize()?;
+    if !path.starts_with(&root) {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "file is outside the active workspace",
+        ));
+    }
+    Ok((root, path))
+}
+
+fn search_workspace_files(request_id: u64, root: PathBuf, query: String) -> FileSearchResult {
+    let requested_root = root.clone();
+    let canonical_root = match root.canonicalize() {
+        Ok(root) => root,
+        Err(error) => {
+            return FileSearchResult {
+                request_id,
+                root,
+                query,
+                paths: vec![],
+                truncated: false,
+                error: Some(error.to_string()),
+            };
+        }
+    };
+    let needle = query.to_lowercase();
+    let tokens = needle
+        .split_whitespace()
+        .filter(|token| !token.is_empty())
+        .collect::<Vec<_>>();
+    let mut stack = vec![canonical_root.clone()];
+    let mut candidates = Vec::new();
+    let mut visited = 0usize;
+    let mut truncated = false;
+    while let Some(directory) = stack.pop() {
+        let entries = match fs::read_dir(&directory) {
+            Ok(entries) => entries,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            visited += 1;
+            if visited > MAX_FILE_SEARCH_ENTRIES {
+                truncated = true;
+                break;
+            }
+            let path = entry.path();
+            let file_type = match entry.file_type() {
+                Ok(file_type) => file_type,
+                Err(_) => continue,
+            };
+            if file_type.is_symlink() {
+                continue;
+            }
+            if file_type.is_dir() {
+                let name = entry.file_name();
+                if name != OsStr::new(".git") && name != OsStr::new("node_modules") {
+                    stack.push(path);
+                }
+                continue;
+            }
+            if !file_type.is_file() {
+                continue;
+            }
+            let relative = match path.strip_prefix(&canonical_root) {
+                Ok(relative) => relative,
+                Err(_) => continue,
+            };
+            let label = relative.to_string_lossy().to_lowercase();
+            if tokens.iter().all(|token| label.contains(token)) {
+                let first_match = tokens
+                    .iter()
+                    .filter_map(|token| label.find(token))
+                    .min()
+                    .unwrap_or(usize::MAX);
+                candidates.push((
+                    first_match,
+                    label.len(),
+                    relative.to_path_buf(),
+                    requested_root.join(relative),
+                ));
+            }
+        }
+        if truncated {
+            break;
+        }
+    }
+    candidates.sort_by(|left, right| {
+        left.0
+            .cmp(&right.0)
+            .then_with(|| left.1.cmp(&right.1))
+            .then_with(|| left.2.cmp(&right.2))
+    });
+    if candidates.len() > MAX_FILE_SEARCH_RESULTS {
+        candidates.truncate(MAX_FILE_SEARCH_RESULTS);
+        truncated = true;
+    }
+    FileSearchResult {
+        request_id,
+        root: requested_root,
+        query,
+        paths: candidates.into_iter().map(|(_, _, _, path)| path).collect(),
+        truncated,
+        error: None,
+    }
+}
+
+fn load_workspace_file(request_id: u64, root: PathBuf, path: PathBuf) -> FileLoadResult {
+    let result = (|| -> io::Result<(String, FileRevision)> {
+        let (_, path) = canonical_workspace_path(&root, &path)?;
+        let metadata = fs::metadata(&path)?;
+        if !metadata.is_file() {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "not a file"));
+        }
+        if metadata.len() > MAX_EDITABLE_FILE_BYTES {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "file is larger than the 2 MiB viewer limit",
+            ));
+        }
+        let bytes = fs::read(path)?;
+        let content = String::from_utf8(bytes)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "binary file"))?;
+        Ok((content, file_revision(&metadata)))
+    })();
+    match result {
+        Ok((content, revision)) => FileLoadResult {
+            request_id,
+            path,
+            content: Some(content),
+            revision: Some(revision),
+            error: None,
+        },
+        Err(error) => FileLoadResult {
+            request_id,
+            path,
+            content: None,
+            revision: None,
+            error: Some(error.to_string()),
+        },
+    }
+}
+
+fn save_workspace_file(
+    request_id: u64,
+    root: PathBuf,
+    path: PathBuf,
+    content: String,
+    expected_revision: Option<FileRevision>,
+) -> FileSaveResult {
+    let result = (|| -> io::Result<FileRevision> {
+        let (_, path) = canonical_workspace_path(&root, &path)?;
+        let metadata = fs::symlink_metadata(&path)?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "only regular workspace files can be saved",
+            ));
+        }
+        if let Some(expected) = expected_revision {
+            if file_revision(&metadata) != expected {
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    "file changed on disk; reopen it before saving",
+                ));
+            }
+        }
+        if content.len() as u64 > MAX_EDITABLE_FILE_BYTES {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "edited file exceeds the 2 MiB limit",
+            ));
+        }
+        let parent = path.parent().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "file has no parent directory")
+        })?;
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let temporary = parent.join(format!(".cosmos-save-{}-{nonce}", std::process::id()));
+        let write_result = (|| -> io::Result<FileRevision> {
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&temporary)?;
+            file.set_permissions(metadata.permissions())?;
+            file.write_all(content.as_bytes())?;
+            file.sync_all()?;
+            fs::rename(&temporary, &path)?;
+            Ok(file_revision(&fs::metadata(&path)?))
+        })();
+        if write_result.is_err() {
+            let _ = fs::remove_file(&temporary);
+        }
+        write_result
+    })();
+    FileSaveResult {
+        request_id,
+        path,
+        revision: result.as_ref().ok().copied(),
+        error: result.err().map(|error| error.to_string()),
+    }
+}
+
 pub struct WorkspaceService {
     directory_tx: Sender<(PathBuf, bool)>,
     context_tx: Sender<ContextRequest>,
     git_status_tx: Sender<PathBuf>,
+    file_tx: Sender<FileRequest>,
     watch_tx: Sender<HashSet<PathBuf>>,
     response_rx: Receiver<ServiceResponse>,
 }
@@ -1369,6 +1648,7 @@ impl WorkspaceService {
         let (directory_tx, directory_rx) = mpsc::channel::<(PathBuf, bool)>();
         let (context_tx, context_rx) = mpsc::channel::<ContextRequest>();
         let (git_status_tx, git_status_rx) = mpsc::channel::<PathBuf>();
+        let (file_tx, file_rx) = mpsc::channel::<FileRequest>();
         let (watch_tx, watch_rx) = mpsc::channel::<HashSet<PathBuf>>();
         let (response_tx, response_rx) = mpsc::channel();
         let directory_response_tx = response_tx.clone();
@@ -1425,6 +1705,47 @@ impl WorkspaceService {
             })
             .expect("spawn cosmos git status reader");
 
+        let file_response_tx = response_tx.clone();
+        std::thread::Builder::new()
+            .name("cosmos-file-workspace".to_string())
+            .spawn(move || {
+                while let Ok(request) = file_rx.recv() {
+                    let response = match request {
+                        FileRequest::Search {
+                            request_id,
+                            root,
+                            query,
+                        } => ServiceResponse::FileSearchCompleted(search_workspace_files(
+                            request_id, root, query,
+                        )),
+                        FileRequest::Load {
+                            request_id,
+                            root,
+                            path,
+                        } => {
+                            ServiceResponse::FileLoaded(load_workspace_file(request_id, root, path))
+                        }
+                        FileRequest::Save {
+                            request_id,
+                            root,
+                            path,
+                            content,
+                            expected_revision,
+                        } => ServiceResponse::FileSaved(save_workspace_file(
+                            request_id,
+                            root,
+                            path,
+                            content,
+                            expected_revision,
+                        )),
+                    };
+                    if file_response_tx.send(response).is_err() {
+                        break;
+                    }
+                }
+            })
+            .expect("spawn cosmos file workspace");
+
         std::thread::Builder::new()
             .name("cosmos-filesystem-watcher".to_string())
             .spawn(move || {
@@ -1468,6 +1789,7 @@ impl WorkspaceService {
             directory_tx,
             context_tx,
             git_status_tx,
+            file_tx,
             watch_tx,
             response_rx,
         }
@@ -1489,6 +1811,10 @@ impl WorkspaceService {
 
     pub fn git_status(&self, root: PathBuf) {
         let _ = self.git_status_tx.send(root);
+    }
+
+    pub fn file_request(&self, request: FileRequest) {
+        let _ = self.file_tx.send(request);
     }
 
     pub fn watch_directories(&self, paths: HashSet<PathBuf>) {
@@ -1870,5 +2196,99 @@ mod tests {
             "/Users/example/.local/bin/codex-code-mode-host"
         )));
         assert!(!is_codex_loop_executable(Path::new("/usr/bin/node")));
+    }
+
+    #[test]
+    fn searches_loads_and_atomically_saves_workspace_files() {
+        let root = temporary_path("file-workspace");
+        fs::create_dir_all(root.join("docs")).unwrap();
+        fs::create_dir_all(root.join(".git")).unwrap();
+        fs::write(root.join("README.md"), "# Cosmos\n").unwrap();
+        fs::write(root.join("docs/guide.md"), "before\n").unwrap();
+        fs::write(root.join(".git/hidden.md"), "hidden\n").unwrap();
+
+        let search = search_workspace_files(7, root.clone(), "guide".to_string());
+        assert_eq!(search.request_id, 7);
+        assert_eq!(search.paths, vec![root.join("docs/guide.md")]);
+        assert!(!search.truncated);
+        assert!(search.error.is_none());
+
+        let loaded = load_workspace_file(8, root.clone(), root.join("README.md"));
+        assert_eq!(loaded.content.as_deref(), Some("# Cosmos\n"));
+        assert!(loaded.revision.is_some());
+        assert!(loaded.error.is_none());
+
+        let guide = load_workspace_file(9, root.clone(), root.join("docs/guide.md"));
+        let saved = save_workspace_file(
+            10,
+            root.clone(),
+            root.join("docs/guide.md"),
+            "after\n".to_string(),
+            guide.revision,
+        );
+        assert!(saved.error.is_none());
+        assert!(saved.revision.is_some());
+        assert_eq!(
+            fs::read_to_string(root.join("docs/guide.md")).unwrap(),
+            "after\n"
+        );
+        assert!(fs::read_dir(root.join("docs"))
+            .unwrap()
+            .flatten()
+            .all(|entry| !entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".cosmos-save-")));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn file_workspace_rejects_paths_outside_the_active_root() {
+        let root = temporary_path("file-root");
+        let outside = temporary_path("file-outside");
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("private.md"), "do not read\n").unwrap();
+
+        let loaded = load_workspace_file(1, root.clone(), outside.join("private.md"));
+        assert!(loaded.content.is_none());
+        assert!(loaded
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("outside"));
+
+        let _ = fs::remove_dir_all(root);
+        let _ = fs::remove_dir_all(outside);
+    }
+
+    #[test]
+    fn file_workspace_refuses_to_overwrite_external_changes() {
+        let root = temporary_path("file-conflict");
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("notes.md");
+        fs::write(&path, "one\n").unwrap();
+        let loaded = load_workspace_file(1, root.clone(), path.clone());
+        fs::write(&path, "external change with a different length\n").unwrap();
+
+        let saved = save_workspace_file(
+            2,
+            root.clone(),
+            path.clone(),
+            "editor change\n".to_string(),
+            loaded.revision,
+        );
+        assert!(saved
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("changed on disk"));
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "external change with a different length\n"
+        );
+
+        let _ = fs::remove_dir_all(root);
     }
 }
