@@ -12,8 +12,8 @@ git diff --check
 
 The workspace tests cover legacy follow-state compatibility, root matching and
 deduplication, folder-scoped row isolation, layout migration, Git porcelain
-parsing, directory sorting/filtering, persistence, bounded file search,
-workspace-confined load/save, atomic-save cleanup, external-change conflict
+parsing, directory sorting/filtering, persistence, workspace-confined
+load/save, atomic-save cleanup, external-change conflict
 detection, structured Codex usage parsing, reset selection, exact
 executable-name process detection, CPU tick delta calculation, RAM label
 formatting, and native macOS capacity reads.
@@ -140,15 +140,16 @@ Use only panes created in Cosmos Term.
     the command reaches the shell and no explorer action runs.
 10. Press `Command+Shift+E` and confirm the sidebar remains visible and no `E`
     reaches the shell.
-11. Press `Command+P` and confirm Quick Open replaces only the right-side
-    rendering. Search for a Markdown file, open it, and confirm formatted
-    headings, lists, quotes, code, and link destinations. Click `‹ TERMINAL`
-    and confirm the original shell/tmux process, screen, and scrollback return.
+11. Press `Command+S` and confirm an empty file workspace replaces only the
+    right-side rendering. Confirm no file or search field is selected, click a
+    Markdown file in the left Explorer, and verify formatted headings, lists,
+    quotes, code, and link destinations. Press `Command+S` again and confirm
+    the original shell/tmux process, screen, and scrollback return.
 12. Click a visible UTF-8 file, enter edit mode with `Command+E`, make a
-    disposable change, and save with `Command+S`. Confirm permissions are
-    unchanged and no `.cosmos-save-*` file remains. Modify a second disposable
-    copy externally after opening it and confirm Cosmos refuses to overwrite
-    the newer revision.
+    disposable change, and save with `Command+Return`. Confirm permissions
+    are unchanged and no `.cosmos-save-*` file remains. Modify a second
+    disposable copy externally after opening it and confirm Cosmos refuses to
+    overwrite the newer revision.
 13. Leave an edit dirty and confirm `Command+W` and `Command+Q` are blocked.
     Save it, or deliberately discard it with `Command+Shift+D`, then confirm
     normal protected-close behavior resumes.
