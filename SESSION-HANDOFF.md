@@ -211,8 +211,14 @@ explorer and using independent application/runtime identities.
   The signed toggle candidate is staged as
   `Cosmos Term-command-s-toggle-2026-07-18.app` in the same directory (GUI
   SHA-256 `57502ba40b2b7217692dbe3dd1e578de80100c5029bbbcdd9285be355ffe641f`).
-  Installed PID 61181 remains on the backed-up build until protected quit and
-  final installation.
+  That exact binary is installed at `/Applications/Cosmos Term.app`. Installed
+  PID 65297 launched in the repository; the first live `Command+S` displayed
+  `FILE WORKSPACE` with no selected file or search field, and the second
+  `Command+S` restored the same `zsh` pane at the same CWD. PID 65297 and its
+  shell child remained continuously alive. The installed empty-panel capture
+  is `/tmp/cosmos-file-workspace-capture/installed-command-s-empty.png`
+  (SHA-256
+  `efa2ad09ff1a9642bf3e4cfb69654197b133159f572b5a1a0dc4541568b56bf9`).
 
 ## Verification commands
 
