@@ -119,13 +119,13 @@ explorer and using independent application/runtime identities.
   (`9bdb55de65beaed10e5534295366404c85bf347491e564a33746f82cf55f138b`).
   The disposable app/server were removed; live Cosmos PID 34032 and default
   tmux client `/dev/ttys000 2 %4` were unchanged.
-- The source fix is public on `main` at code commit
-  `87c1773fe63d9a3eb2a13add684e95e83fc7f1be`. The commit uses `[skip ci]`;
+- The global Explorer-focus fix is public on `main` at code commit
+  `707409de70818cb806650e2cff4b907d38927f93`. The commit uses `[skip ci]`;
   no pull request was opened and no GitHub workflow was invoked or rerun. The
   signed bundle installed in place at `/Applications/Cosmos Term.app` is
-  version `20260719-120710-87c1773f`, and its `cosmos-term-gui` SHA-256 is
-  `00d5728afb480a33791e68ee3fffc9eae40ab0f5a7e9f74a225731d156a63b41`.
-  Installation preserved live PID 664 and `/dev/ttys000 0 %0`; the running
+  version `20260719-124632-707409de`, and its `cosmos-term-gui` SHA-256 is
+  `b76212854af10a3eb71ca5547279e7be4c432597162049347130f95d81e02a34`.
+  Installation preserved live PID 34032 and `/dev/ttys000 2 %4`; the running
   process retains its old in-memory code until the user's next normal relaunch.
 - The horizontal-split regression was reproduced on a dedicated tmux 3.7b
   socket after a multi-column `ls`. Cosmos and `stty` both reported the exact
