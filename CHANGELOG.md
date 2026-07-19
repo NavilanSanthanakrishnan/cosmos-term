@@ -12,8 +12,10 @@ history remains available in `docs/changelog.md` and the retained Git history.
   file and has no search surface.
 - Scoped the file-workspace overlay to the focused native pane or exact active
   tmux pane rectangle, leaving every other pane live and visible.
-- Preserved configured tmux prefix sequences through the file workspace, so
-  custom pane-navigation bindings continue working in preview and edit modes.
+- Made tmux file preview keyboard-transparent, so command prompts, copy mode,
+  key tables, window and pane commands, repeat bindings, and direct no-prefix
+  bindings continue working; configured prefixes also remain available while
+  editing.
 - Added formatted Markdown preview, UTF-8 text preview, line-numbered editing,
   native path/mode navigation, and immediate terminal return.
 - Added 2 MiB file limits, workspace-boundary enforcement, atomic saves,
