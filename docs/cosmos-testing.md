@@ -242,6 +242,17 @@ Verify:
 - click a file or the Explorer surface so the sidebar is visually focused,
   then confirm a disposable direct binding on an Explorer key such as `R`
   still reaches tmux instead of triggering an Explorer action
+- while preview owns the active pane, press `<prefix> 0`; confirm the Explorer
+  receives the active selection, W/S move one row, Shift+W/Shift+S move five
+  rows, and Return opens the selected file in the same pane surface
+- while Explorer keyboard navigation is active, run a different tmux prefix
+  command and confirm it still reaches tmux; change pane focus and confirm
+  Explorer mode exits without moving or swapping the workspace
+- print a multi-column `ls`, create a horizontal split, and record
+  `#{client_width}`, `#{pane_width}`, and `stty size` for both panes. Confirm
+  the rendered divider agrees exactly with tmux's reported 50/49-style grid;
+  historical `ls` columns may reflow when tmux narrows the original pane, but
+  Cosmos must not add a second width offset or corrupt the new pane
 - the terminal remains responsive
 - as the final destructive check, kill the owning pane only on the dedicated
   server and confirm Cosmos returns to terminal mode while the remaining pane
