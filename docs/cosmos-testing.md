@@ -140,11 +140,12 @@ Use only panes created in Cosmos Term.
     the command reaches the shell and no explorer action runs.
 10. Press `Command+Shift+E` and confirm the sidebar remains visible and no `E`
     reaches the shell.
-11. Press `Command+S` and confirm an empty file workspace replaces only the
-    right-side rendering. Confirm no file or search field is selected, click a
-    Markdown file in the left Explorer, and verify formatted headings, lists,
-    quotes, code, and link destinations. Press `Command+S` again and confirm
-    the original shell/tmux process, screen, and scrollback return.
+11. Press `Command+S` and confirm an empty file workspace overlays only the
+    focused native pane. Confirm every inactive split remains visible and no
+    file or search field is selected. Click a Markdown file in the left
+    Explorer and verify formatted headings, lists, quotes, code, and link
+    destinations. Press `Command+S` again and confirm the original shell
+    process, screen, and scrollback return.
 12. Click a visible UTF-8 file, enter edit mode with `Command+E`, make a
     disposable change, and save with `Command+Return`. Confirm permissions
     are unchanged and no `.cosmos-save-*` file remains. Modify a second
@@ -208,7 +209,11 @@ Verify:
 
 - sidebar source says `tmux`
 - initial selected pane resolves `/path/one`
+- `Command+S` overlays only the first tmux pane rectangle; the second pane
+  remains visible and its terminal content does not bleed through the overlay
 - `tmux -S "$sock" select-pane -t <second-pane>` resolves `/path/two`
+- after returning to terminal mode, `Command+S` overlays only the second pane
+  rectangle and leaves the first pane visible
 - the terminal remains responsive
 
 Stop only the test Cosmos process and run
