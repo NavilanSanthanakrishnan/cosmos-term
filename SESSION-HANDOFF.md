@@ -127,6 +127,10 @@ explorer and using independent application/runtime identities.
   `b76212854af10a3eb71ca5547279e7be4c432597162049347130f95d81e02a34`.
   Installation preserved live PID 34032 and `/dev/ttys000 2 %4`; the running
   process retains its old in-memory code until the user's next normal relaunch.
+- GitHub Actions is disabled for the public repository at the repository
+  permission level. Publishing the repository briefly caused GitHub's existing
+  Dependabot configuration to enqueue two automatic dynamic checks; both
+  completed without running project CI or consuming Codex usage.
 - The horizontal-split regression was reproduced on a dedicated tmux 3.7b
   socket after a multi-column `ls`. Cosmos and `stty` both reported the exact
   100-column client split into 50/49-column panes, and the rendered divider
