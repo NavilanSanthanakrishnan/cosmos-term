@@ -25,7 +25,6 @@ This crate owns UI-independent workspace behavior:
 - exact active-pane-directory scoping
 - project-root discovery for Git decorations
 - lazy direct-directory listings and stable sorting
-- bounded recursive file-name search
 - workspace-confined UTF-8 file loading
 - revision-checked, permission-preserving atomic text saves
 - row generation for expanded directories
@@ -39,10 +38,10 @@ Five independent worker threads serve directory reads, on-demand file
 workspace operations, pane-context requests, Git status requests, and
 filesystem watches. Responses return through a single non-blocking channel
 consumed by the window. The file worker sleeps on its channel unless the user
-opens Quick Open, loads a file, or saves. The render thread never recursively
-scans a workspace, reads or writes file contents, invokes Git, or reads Codex
-session data. Codex and machine-capacity status work continue to share the
-existing pane-context worker rather than adding a status helper.
+loads or saves a file. The render thread never reads or writes file contents,
+invokes Git, or reads Codex session data. Codex and machine-capacity status
+work continue to share the existing pane-context worker rather than adding a
+status helper.
 
 Only expanded directories are watched, and watches are non-recursive. A
 30-second periodic refresh provides a fallback if a platform watcher misses an
@@ -64,8 +63,8 @@ The native window adapter owns:
 - mouse hit targets, scrolling, divider drag, and row activation
 - keyboard navigation and root prompts
 - spawning selected directories into tabs or splits
-- switching the right-side surface between the live terminal, Quick Open,
-  formatted Markdown/text preview, and text edit mode
+- switching the right-side surface between the live terminal, an initially
+  empty file workspace, formatted Markdown/text preview, and text edit mode
 - file-workspace mouse/keyboard routing, document scrolling, line-numbered
   editing, dirty state, and native mode/path header
 - a native Code OSS Dark Modern status bar that reserves 22 logical pixels
@@ -129,18 +128,18 @@ WezTerm reports for native and remote-aware shells.
 
 ## File workspace
 
-`Command+P`, a file-row click, or the `COSMOS_FILE_OPEN` shell-integration user
-variable requests a native file transition. The current pane's exact resolved
-CWD is the security and display root. Search visits no more than 20,000
-entries, excludes `.git` and `node_modules`, returns at most 200 results, and
-does not follow symlinks.
+`Command+S` toggles between terminal painting and the file workspace for the
+focused native or tmux pane. A new pane context has no selected file; files
+load only through a visible Explorer row or the `COSMOS_FILE_OPEN`
+shell-integration user variable. The current pane's exact resolved CWD is the
+security and display root.
 
 Loads canonicalize both root and target, reject paths outside the root, reject
 binary data, and cap editable content at 2 MiB. Markdown is parsed with
 `pulldown-cmark` into native heading, paragraph, list, quote, task, rule, code,
 and link-destination rows. Other UTF-8 files use a monospaced text view.
 
-Edit mode owns keystrokes before the normal terminal input map. `Command+S`
+Edit mode owns keystrokes before the normal terminal input map. `Command+Return`
 writes a same-directory temporary file, preserves permissions, synchronizes
 it, and atomically renames it over the original. The revision captured at load
 must still match immediately before save; external changes from a shell, tmux

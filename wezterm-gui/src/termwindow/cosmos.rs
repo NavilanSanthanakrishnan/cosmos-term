@@ -49,8 +49,6 @@ const EXPLORER_BODY_FONT_LOGICAL_SIZE: f64 = 15.0;
 const EXPLORER_ICON_FONT_LOGICAL_SIZE: f64 = 16.0;
 const STATUS_BAR_FONT_LOGICAL_SIZE: f64 = 12.0;
 const FILE_HEADER_HEIGHT: usize = 38;
-const FILE_SEARCH_HEIGHT: usize = 38;
-const FILE_ROW_HEIGHT: usize = 24;
 const FILE_CONTENT_PADDING: usize = 24;
 const FILE_BODY_FONT_LOGICAL_SIZE: f64 = 15.0;
 const FILE_CODE_FONT_LOGICAL_SIZE: f64 = 14.0;
@@ -95,9 +93,7 @@ const STATUS_BAR_TEXT: RgbColor = RgbColor::new_8bpc(204, 204, 204);
 const STATUS_BAR_LIVE: RgbColor = RgbColor::new_8bpc(137, 209, 133);
 const FILE_BG: RgbColor = RgbColor::new_8bpc(30, 30, 30);
 const FILE_HEADER_BG: RgbColor = RgbColor::new_8bpc(24, 24, 24);
-const FILE_INPUT_BG: RgbColor = RgbColor::new_8bpc(49, 50, 51);
 const FILE_BORDER: RgbColor = RgbColor::new_8bpc(63, 63, 70);
-const FILE_ACCENT: RgbColor = RgbColor::new_8bpc(0, 122, 204);
 const FILE_LINK: RgbColor = RgbColor::new_8bpc(78, 148, 206);
 const FILE_CODE_BG: RgbColor = RgbColor::new_8bpc(37, 37, 38);
 
@@ -200,8 +196,6 @@ pub enum ExplorerUiItem {
 pub enum FileWorkspaceUiItem {
     Surface,
     TerminalTab,
-    SearchBox,
-    SearchResult(usize),
     EditToggle,
 }
 
@@ -214,7 +208,6 @@ pub enum ExplorerPromptKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FileWorkspaceMode {
     Terminal,
-    Search,
     View,
     Edit,
 }
@@ -238,6 +231,9 @@ struct DocumentLine {
 #[derive(Debug)]
 struct FileWorkspaceUi {
     mode: FileWorkspaceMode,
+    resume_mode: FileWorkspaceMode,
+    owner_pane_id: Option<usize>,
+    owner_root: Option<PathBuf>,
     active_path: Option<PathBuf>,
     content: String,
     document_lines: Vec<DocumentLine>,
@@ -247,12 +243,8 @@ struct FileWorkspaceUi {
     revision: Option<FileRevision>,
     cursor: usize,
     scroll: usize,
-    query: String,
-    results: Vec<PathBuf>,
-    selected_result: usize,
     request_id: u64,
     pending_request: Option<u64>,
-    search_truncated: bool,
     error: Option<String>,
 }
 
@@ -260,6 +252,9 @@ impl Default for FileWorkspaceUi {
     fn default() -> Self {
         Self {
             mode: FileWorkspaceMode::Terminal,
+            resume_mode: FileWorkspaceMode::View,
+            owner_pane_id: None,
+            owner_root: None,
             active_path: None,
             content: String::new(),
             document_lines: vec![],
@@ -269,12 +264,8 @@ impl Default for FileWorkspaceUi {
             revision: None,
             cursor: 0,
             scroll: 0,
-            query: String::new(),
-            results: vec![],
-            selected_result: 0,
             request_id: 0,
             pending_request: None,
-            search_truncated: false,
             error: None,
         }
     }
@@ -289,6 +280,25 @@ impl FileWorkspaceUi {
         self.request_id = self.request_id.wrapping_add(1).max(1);
         self.pending_request = Some(self.request_id);
         self.request_id
+    }
+
+    fn reset_for_context(&mut self, pane_id: usize, root: PathBuf) {
+        self.request_id = self.request_id.wrapping_add(1).max(1);
+        self.pending_request = None;
+        self.mode = FileWorkspaceMode::View;
+        self.resume_mode = FileWorkspaceMode::View;
+        self.owner_pane_id = Some(pane_id);
+        self.owner_root = Some(root);
+        self.active_path = None;
+        self.content.clear();
+        self.document_lines.clear();
+        self.wrapped_document_lines.clear();
+        self.wrap_columns = 0;
+        self.dirty = false;
+        self.revision = None;
+        self.cursor = 0;
+        self.scroll = 0;
+        self.error = None;
     }
 
     fn is_markdown(&self) -> bool {
@@ -369,7 +379,6 @@ impl FileWorkspaceUi {
         };
         let mode = match self.mode {
             FileWorkspaceMode::Terminal => "terminal",
-            FileWorkspaceMode::Search => "search",
             FileWorkspaceMode::View => "view",
             FileWorkspaceMode::Edit => "edit",
         };
@@ -379,7 +388,6 @@ impl FileWorkspaceUi {
             "path": self.active_path,
             "content_bytes": self.content.len(),
             "document_lines": self.document_lines.len(),
-            "results": self.results.len(),
             "dirty": self.dirty,
             "pending": self.pending_request,
             "error": self.error,
@@ -1184,6 +1192,7 @@ impl TermWindow {
                         .unwrap_or(false);
                     if is_current {
                         changed |= self.explorer.apply_context(context, false);
+                        changed |= self.reconcile_file_workspace_context();
                     } else {
                         self.explorer.context_request_in_flight = false;
                     }
@@ -1214,30 +1223,7 @@ impl TermWindow {
                         changed = true;
                     }
                 }
-                ServiceResponse::FileSearchCompleted(result) => {
-                    if self.explorer.file_workspace.pending_request == Some(result.request_id)
-                        && self.explorer.file_workspace.mode == FileWorkspaceMode::Search
-                    {
-                        self.explorer.file_workspace.pending_request = None;
-                        self.explorer.file_workspace.results = result.paths;
-                        self.explorer.file_workspace.selected_result = self
-                            .explorer
-                            .file_workspace
-                            .selected_result
-                            .min(self.explorer.file_workspace.results.len().saturating_sub(1));
-                        self.explorer.file_workspace.search_truncated = result.truncated;
-                        self.explorer.file_workspace.error = result.error;
-                        log::debug!(
-                            "cosmos file workspace: search request {} returned {} files",
-                            result.request_id,
-                            self.explorer.file_workspace.results.len()
-                        );
-                        self.explorer
-                            .file_workspace
-                            .trace_test_state("search_completed");
-                        changed = true;
-                    }
-                }
+                ServiceResponse::FileSearchCompleted(_) => {}
                 ServiceResponse::FileLoaded(result) => {
                     if self.explorer.file_workspace.pending_request == Some(result.request_id)
                         && self.explorer.file_workspace.active_path.as_ref() == Some(&result.path)
@@ -1570,7 +1556,7 @@ impl TermWindow {
             return false;
         }
         self.explorer.file_workspace.error = Some(
-            "Unsaved changes blocked closing. Press Command+S to save or Command+Shift+D to discard."
+            "Unsaved changes blocked closing. Press Command+Return to save or Command+Shift+D to discard."
                 .to_string(),
         );
         self.explorer
@@ -1587,7 +1573,7 @@ impl TermWindow {
             return false;
         }
         self.explorer.file_workspace.error = Some(
-            "Unsaved changes blocked closing. Press Command+S to save or Command+Shift+D to discard."
+            "Unsaved changes blocked closing. Press Command+Return to save or Command+Shift+D to discard."
                 .to_string(),
         );
         self.explorer
@@ -1602,7 +1588,6 @@ impl TermWindow {
     pub fn file_workspace_window_title(&self) -> Option<String> {
         match self.explorer.file_workspace.mode {
             FileWorkspaceMode::Terminal => None,
-            FileWorkspaceMode::Search => Some("Quick Open — Cosmos Term".to_string()),
             FileWorkspaceMode::View | FileWorkspaceMode::Edit => {
                 let name = self
                     .explorer
@@ -1611,7 +1596,7 @@ impl TermWindow {
                     .as_deref()
                     .and_then(Path::file_name)
                     .map(|name| name.to_string_lossy().to_string())
-                    .unwrap_or_else(|| "File".to_string());
+                    .unwrap_or_else(|| "File Workspace".to_string());
                 let mode = if self.explorer.file_workspace.mode == FileWorkspaceMode::Edit {
                     "Edit"
                 } else {
@@ -1629,54 +1614,73 @@ impl TermWindow {
             .map(|root| root.path.clone())
     }
 
-    pub fn show_file_search(&mut self) {
+    fn reconcile_file_workspace_context(&mut self) -> bool {
+        if !self.explorer.file_workspace.visible() {
+            return false;
+        }
+        let pane_id = match self.explorer.active_context.as_ref() {
+            Some(context) => context.pane_id,
+            None => return false,
+        };
         let root = match self.active_workspace_root() {
             Some(root) => root,
+            None => return false,
+        };
+        let context_changed = self.explorer.file_workspace.owner_pane_id != Some(pane_id)
+            || self.explorer.file_workspace.owner_root.as_ref() != Some(&root);
+        if !context_changed {
+            return false;
+        }
+        if self.explorer.file_workspace.dirty {
+            self.explorer.file_workspace.error = Some(
+                "This file has unsaved changes from another pane. Press Command+Return to save or Command+Shift+D to discard."
+                    .to_string(),
+            );
+        } else {
+            self.explorer
+                .file_workspace
+                .reset_for_context(pane_id, root);
+        }
+        self.update_title();
+        true
+    }
+
+    pub fn show_file_workspace(&mut self) {
+        let pane_id = match self.explorer.active_context.as_ref() {
+            Some(context) => context.pane_id,
             None => {
                 self.explorer.file_workspace.error =
                     Some("Waiting for the active pane directory…".to_string());
-                self.explorer.file_workspace.mode = FileWorkspaceMode::Search;
+                self.explorer.file_workspace.mode = FileWorkspaceMode::View;
                 return;
             }
         };
-        let request_id = self.explorer.file_workspace.next_request_id();
-        log::debug!(
-            "cosmos file workspace: quick open request {} for {}",
-            request_id,
-            root.display()
-        );
-        self.explorer.file_workspace.mode = FileWorkspaceMode::Search;
-        self.explorer.file_workspace.query.clear();
-        self.explorer.file_workspace.results.clear();
-        self.explorer.file_workspace.selected_result = 0;
-        self.explorer.file_workspace.search_truncated = false;
-        self.explorer.file_workspace.error = None;
-        self.explorer.service.file_request(FileRequest::Search {
-            request_id,
-            root,
-            query: String::new(),
-        });
-        self.explorer
-            .file_workspace
-            .trace_test_state("search_requested");
-        self.update_title();
-        self.schedule_explorer_tick();
-    }
-
-    fn refresh_file_search(&mut self) {
         let root = match self.active_workspace_root() {
             Some(root) => root,
             None => return,
         };
-        let request_id = self.explorer.file_workspace.next_request_id();
-        let query = self.explorer.file_workspace.query.clone();
-        self.explorer.file_workspace.error = None;
-        self.explorer.service.file_request(FileRequest::Search {
-            request_id,
-            root,
-            query,
-        });
-        self.schedule_explorer_tick();
+        let context_changed = self.explorer.file_workspace.owner_pane_id != Some(pane_id)
+            || self.explorer.file_workspace.owner_root.as_ref() != Some(&root);
+        if context_changed {
+            if self.explorer.file_workspace.dirty {
+                self.explorer.file_workspace.error = Some(
+                    "This file has unsaved changes from another pane. Press Command+Return to save or Command+Shift+D to discard."
+                        .to_string(),
+                );
+            } else {
+                self.explorer
+                    .file_workspace
+                    .reset_for_context(pane_id, root);
+            }
+        }
+        self.explorer.file_workspace.mode = self.explorer.file_workspace.resume_mode;
+        self.explorer
+            .file_workspace
+            .trace_test_state("file_workspace_shown");
+        self.update_title();
+        if let Some(window) = self.window.as_ref() {
+            window.invalidate();
+        }
     }
 
     pub fn open_file_workspace_path(&mut self, path: PathBuf) {
@@ -1685,7 +1689,7 @@ impl TermWindow {
         {
             self.explorer.file_workspace.mode = FileWorkspaceMode::View;
             self.explorer.file_workspace.error = Some(
-                "Unsaved changes are still open. Press Command+S before opening another file."
+                "Unsaved changes are still open. Press Command+Return before opening another file."
                     .to_string(),
             );
             return;
@@ -1694,6 +1698,10 @@ impl TermWindow {
             Some(root) => root,
             None => return,
         };
+        if let Some(context) = self.explorer.active_context.as_ref() {
+            self.explorer.file_workspace.owner_pane_id = Some(context.pane_id);
+        }
+        self.explorer.file_workspace.owner_root = Some(root.clone());
         let request_id = self.explorer.file_workspace.next_request_id();
         log::debug!(
             "cosmos file workspace: loading request {} for {}",
@@ -1701,6 +1709,7 @@ impl TermWindow {
             path.display()
         );
         self.explorer.file_workspace.mode = FileWorkspaceMode::View;
+        self.explorer.file_workspace.resume_mode = FileWorkspaceMode::View;
         self.explorer.file_workspace.active_path = Some(path.clone());
         self.explorer.file_workspace.content.clear();
         self.explorer.file_workspace.document_lines.clear();
@@ -1727,7 +1736,13 @@ impl TermWindow {
         if !self.explorer.file_workspace.dirty {
             return;
         }
-        let root = match self.active_workspace_root() {
+        let root = match self
+            .explorer
+            .file_workspace
+            .owner_root
+            .clone()
+            .or_else(|| self.active_workspace_root())
+        {
             Some(root) => root,
             None => return,
         };
@@ -1758,6 +1773,12 @@ impl TermWindow {
     }
 
     pub fn return_to_terminal_workspace(&mut self) {
+        if matches!(
+            self.explorer.file_workspace.mode,
+            FileWorkspaceMode::View | FileWorkspaceMode::Edit
+        ) {
+            self.explorer.file_workspace.resume_mode = self.explorer.file_workspace.mode;
+        }
         self.explorer.file_workspace.mode = FileWorkspaceMode::Terminal;
         log::debug!("cosmos file workspace: returned to terminal");
         self.explorer.file_workspace.error = None;
@@ -1770,35 +1791,24 @@ impl TermWindow {
         }
     }
 
-    fn open_selected_search_result(&mut self) {
-        let path = self
-            .explorer
-            .file_workspace
-            .results
-            .get(self.explorer.file_workspace.selected_result)
-            .cloned();
-        if let Some(path) = path {
-            self.open_file_workspace_path(path);
-        }
-    }
-
     pub fn file_workspace_key_down(&mut self, key: &KeyCode, modifiers: Modifiers) -> bool {
         let modifiers = modifiers.remove_positional_mods();
         if matches!(
             (key, modifiers),
-            (KeyCode::Char('p' | 'P'), Modifiers::SUPER)
+            (KeyCode::Char('s' | 'S'), Modifiers::SUPER)
         ) {
-            self.show_file_search();
+            if self.explorer.file_workspace.visible() {
+                self.return_to_terminal_workspace();
+            } else {
+                self.show_file_workspace();
+            }
             return true;
         }
         if !self.explorer.file_workspace.visible() {
             return false;
         }
 
-        if matches!(
-            (key, modifiers),
-            (KeyCode::Char('s' | 'S'), Modifiers::SUPER)
-        ) {
+        if matches!((key, modifiers), (KeyCode::Char('\r'), Modifiers::SUPER)) {
             self.save_file_workspace();
             return true;
         }
@@ -1809,11 +1819,13 @@ impl TermWindow {
             match self.explorer.file_workspace.mode {
                 FileWorkspaceMode::View => {
                     self.explorer.file_workspace.mode = FileWorkspaceMode::Edit;
+                    self.explorer.file_workspace.resume_mode = FileWorkspaceMode::Edit;
                     self.explorer.file_workspace.cursor =
                         self.explorer.file_workspace.content.len();
                 }
                 FileWorkspaceMode::Edit => {
                     self.explorer.file_workspace.mode = FileWorkspaceMode::View;
+                    self.explorer.file_workspace.resume_mode = FileWorkspaceMode::View;
                     self.explorer.file_workspace.rebuild_document();
                 }
                 _ => {}
@@ -1831,7 +1843,7 @@ impl TermWindow {
             )
         {
             self.explorer.file_workspace.error = Some(
-                "Unsaved changes blocked closing. Press Command+S to save or Command+Shift+D to discard."
+                "Unsaved changes blocked closing. Press Command+Return to save or Command+Shift+D to discard."
                     .to_string(),
             );
             self.explorer
@@ -1844,6 +1856,9 @@ impl TermWindow {
             (KeyCode::Char('d' | 'D'), mods) if mods == (Modifiers::SUPER | Modifiers::SHIFT)
         ) {
             self.explorer.file_workspace.dirty = false;
+            if self.reconcile_file_workspace_context() {
+                return true;
+            }
             if let Some(path) = self.explorer.file_workspace.active_path.clone() {
                 self.open_file_workspace_path(path);
             } else {
@@ -1859,50 +1874,6 @@ impl TermWindow {
         }
 
         match self.explorer.file_workspace.mode {
-            FileWorkspaceMode::Search => {
-                match (key, modifiers) {
-                    (KeyCode::UpArrow, Modifiers::NONE) => {
-                        self.explorer.file_workspace.selected_result = self
-                            .explorer
-                            .file_workspace
-                            .selected_result
-                            .saturating_sub(1);
-                    }
-                    (KeyCode::DownArrow, Modifiers::NONE) => {
-                        let last = self.explorer.file_workspace.results.len().saturating_sub(1);
-                        self.explorer.file_workspace.selected_result =
-                            (self.explorer.file_workspace.selected_result + 1).min(last);
-                    }
-                    (KeyCode::Char('\r'), Modifiers::NONE) => {
-                        self.open_selected_search_result();
-                    }
-                    (KeyCode::Char('\u{1b}'), Modifiers::NONE) => {
-                        self.explorer.file_workspace.mode =
-                            if self.explorer.file_workspace.active_path.is_some() {
-                                FileWorkspaceMode::View
-                            } else {
-                                FileWorkspaceMode::Terminal
-                            };
-                        self.update_title();
-                    }
-                    (KeyCode::Char('\u{8}' | '\u{7f}'), Modifiers::NONE) => {
-                        self.explorer.file_workspace.query.pop();
-                        self.explorer.file_workspace.selected_result = 0;
-                        self.refresh_file_search();
-                    }
-                    (KeyCode::Char(character), mods)
-                        if mods == Modifiers::NONE || mods == Modifiers::SHIFT =>
-                    {
-                        if !character.is_control() {
-                            self.explorer.file_workspace.query.push(*character);
-                            self.explorer.file_workspace.selected_result = 0;
-                            self.refresh_file_search();
-                        }
-                    }
-                    _ => {}
-                }
-                true
-            }
             FileWorkspaceMode::View => {
                 match (key, modifiers) {
                     (KeyCode::UpArrow, Modifiers::NONE) => {
@@ -1961,6 +1932,7 @@ impl TermWindow {
                     }
                     (KeyCode::Char('\u{1b}'), Modifiers::NONE) => {
                         workspace.mode = FileWorkspaceMode::View;
+                        workspace.resume_mode = FileWorkspaceMode::View;
                         workspace.rebuild_document();
                     }
                     (KeyCode::Char('\r'), Modifiers::NONE) => {
@@ -2404,7 +2376,7 @@ impl TermWindow {
                     .display()
                     .to_string()
             })
-            .unwrap_or_else(|| "QUICK OPEN".to_string());
+            .unwrap_or_else(|| "FILE WORKSPACE".to_string());
         let dirty_suffix = if self.explorer.file_workspace.dirty {
             "  ●"
         } else {
@@ -2427,9 +2399,7 @@ impl TermWindow {
             false,
         )?;
 
-        if self.explorer.file_workspace.active_path.is_some()
-            && !matches!(mode, FileWorkspaceMode::Search)
-        {
+        if self.explorer.file_workspace.active_path.is_some() {
             let hovered = self.file_workspace_item_hovered(&FileWorkspaceUiItem::EditToggle);
             if hovered || mode == FileWorkspaceMode::Edit {
                 self.filled_rectangle(
@@ -2475,145 +2445,6 @@ impl TermWindow {
         }
 
         let content_top = top + header_height;
-        if mode == FileWorkspaceMode::Search {
-            let input_margin = scale(18);
-            let input_top = content_top + input_margin;
-            let input_height = scale(FILE_SEARCH_HEIGHT);
-            let input_left = left + input_margin;
-            let input_width = width.saturating_sub(input_margin * 2);
-            self.filled_rectangle(
-                layers,
-                0,
-                euclid::rect(
-                    input_left as f32,
-                    input_top as f32,
-                    input_width as f32,
-                    input_height as f32,
-                ),
-                FILE_INPUT_BG.to_linear_tuple_rgba(),
-            )?;
-            self.filled_rectangle(
-                layers,
-                2,
-                euclid::rect(
-                    input_left as f32,
-                    (input_top + input_height - scale(2)) as f32,
-                    input_width as f32,
-                    scale(2) as f32,
-                ),
-                FILE_ACCENT.to_linear_tuple_rgba(),
-            )?;
-            let query = if self.explorer.file_workspace.query.is_empty() {
-                "Search files by name…".to_string()
-            } else {
-                format!("{}│", self.explorer.file_workspace.query)
-            };
-            self.render_file_line(
-                layers,
-                &query,
-                input_top as f32,
-                (input_left + scale(12)) as f32,
-                input_width.saturating_sub(scale(24)) as f32,
-                input_height as f32,
-                if self.explorer.file_workspace.query.is_empty() {
-                    MUTED
-                } else {
-                    TEXT
-                },
-                false,
-                14.0,
-                false,
-            )?;
-            self.ui_items.push(UIItem {
-                x: input_left,
-                y: input_top,
-                width: input_width,
-                height: input_height,
-                item_type: UIItemType::FileWorkspace(FileWorkspaceUiItem::SearchBox),
-            });
-
-            let result_top = input_top + input_height + scale(10);
-            let row_height = scale(FILE_ROW_HEIGHT);
-            let capacity = bottom.saturating_sub(result_top + scale(24)) / row_height;
-            let results = self.explorer.file_workspace.results.clone();
-            for (index, path) in results.into_iter().take(capacity).enumerate() {
-                let y = result_top + index * row_height;
-                let selected = index == self.explorer.file_workspace.selected_result;
-                let item = FileWorkspaceUiItem::SearchResult(index);
-                if selected || self.file_workspace_item_hovered(&item) {
-                    self.filled_rectangle(
-                        layers,
-                        0,
-                        euclid::rect(
-                            input_left as f32,
-                            y as f32,
-                            input_width as f32,
-                            row_height as f32,
-                        ),
-                        if selected {
-                            ACTIVE_SELECTION_BG
-                        } else {
-                            HOVER_BG
-                        }
-                        .to_linear_tuple_rgba(),
-                    )?;
-                }
-                let label = self
-                    .active_workspace_root()
-                    .and_then(|root| path.strip_prefix(root).ok().map(Path::to_path_buf))
-                    .unwrap_or(path)
-                    .display()
-                    .to_string();
-                self.render_file_line(
-                    layers,
-                    &label,
-                    y as f32,
-                    (input_left + scale(10)) as f32,
-                    input_width.saturating_sub(scale(20)) as f32,
-                    row_height as f32,
-                    TEXT,
-                    false,
-                    13.0,
-                    false,
-                )?;
-                self.ui_items.push(UIItem {
-                    x: input_left,
-                    y,
-                    width: input_width,
-                    height: row_height,
-                    item_type: UIItemType::FileWorkspace(item),
-                });
-            }
-            if self.explorer.file_workspace.pending_request.is_some() {
-                self.render_file_line(
-                    layers,
-                    "Searching…",
-                    (bottom - scale(28)) as f32,
-                    input_left as f32,
-                    input_width as f32,
-                    scale(22) as f32,
-                    MUTED,
-                    false,
-                    12.0,
-                    false,
-                )?;
-            } else if self.explorer.file_workspace.search_truncated {
-                self.render_file_line(
-                    layers,
-                    "Results limited to keep search responsive",
-                    (bottom - scale(28)) as f32,
-                    input_left as f32,
-                    input_width as f32,
-                    scale(22) as f32,
-                    MUTED,
-                    false,
-                    12.0,
-                    false,
-                )?;
-            }
-            return Ok(());
-        }
-
         if let Some(error) = self.explorer.file_workspace.error.clone() {
             self.render_file_line(
                 layers,
@@ -2639,6 +2470,21 @@ impl TermWindow {
                 (left + padding) as f32,
                 width.saturating_sub(padding * 2) as f32,
                 scale(28) as f32,
+                MUTED,
+                false,
+                FILE_BODY_FONT_LOGICAL_SIZE,
+                false,
+            )?;
+            return Ok(());
+        }
+        if self.explorer.file_workspace.active_path.is_none() {
+            self.render_file_line(
+                layers,
+                "Select a file from the Explorer",
+                (content_top + scale(44)) as f32,
+                (left + padding) as f32,
+                width.saturating_sub(padding * 2) as f32,
+                scale(30) as f32,
                 MUTED,
                 false,
                 FILE_BODY_FONT_LOGICAL_SIZE,
@@ -3276,19 +3122,17 @@ impl TermWindow {
         match event.kind {
             MouseEventKind::Press(MousePress::Left) => match item {
                 FileWorkspaceUiItem::TerminalTab => self.return_to_terminal_workspace(),
-                FileWorkspaceUiItem::SearchResult(index) => {
-                    self.explorer.file_workspace.selected_result = index;
-                    self.open_selected_search_result();
-                }
                 FileWorkspaceUiItem::EditToggle => {
                     match self.explorer.file_workspace.mode {
                         FileWorkspaceMode::View => {
                             self.explorer.file_workspace.mode = FileWorkspaceMode::Edit;
+                            self.explorer.file_workspace.resume_mode = FileWorkspaceMode::Edit;
                             self.explorer.file_workspace.cursor =
                                 self.explorer.file_workspace.content.len();
                         }
                         FileWorkspaceMode::Edit => {
                             self.explorer.file_workspace.mode = FileWorkspaceMode::View;
+                            self.explorer.file_workspace.resume_mode = FileWorkspaceMode::View;
                             self.explorer.file_workspace.rebuild_document();
                         }
                         _ => {}
@@ -3332,11 +3176,9 @@ impl TermWindow {
                     }
                     context.invalidate();
                 }
-                FileWorkspaceUiItem::Surface | FileWorkspaceUiItem::SearchBox => {}
+                FileWorkspaceUiItem::Surface => {}
             },
-            MouseEventKind::VertWheel(delta)
-                if !matches!(self.explorer.file_workspace.mode, FileWorkspaceMode::Search) =>
-            {
+            MouseEventKind::VertWheel(delta) => {
                 if delta > 0 {
                     self.explorer.file_workspace.scroll = self
                         .explorer
