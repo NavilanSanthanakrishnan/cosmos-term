@@ -12,6 +12,9 @@ history remains available in `docs/changelog.md` and the retained Git history.
   file and has no search surface.
 - Scoped the file-workspace overlay to the focused native pane or exact active
   tmux pane rectangle, leaving every other pane live and visible.
+- Anchored the file workspace to the tmux pane where it was opened, so focus
+  commands no longer make it jump sides while real swaps and resizes still
+  follow the owning pane.
 - Made tmux file preview keyboard-transparent, so command prompts, copy mode,
   key tables, window and pane commands, repeat bindings, and direct no-prefix
   bindings continue working; configured prefixes also remain available while
