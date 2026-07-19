@@ -218,7 +218,9 @@ explorer and using independent application/runtime identities.
   WezTerm processes were unchanged.
 - The exact signed binary installed at `/Applications/Cosmos Term.app` has
   SHA-256
-  `3f0bc9d6084c0e171a3779b806d6bd0aa519dc7d0686515a5d1c394c7f0ea14f`.
+  `6069d5083b805273571de324f92688eb47078ce4386ee7ac9b9a85bfa808258e`.
+  Its bundle version is `20260718-230405-148aaa0d`, which identifies the
+  public merge containing the implementation.
   Existing PID 71709 predates that on-disk replacement and was deliberately
   left alive to preserve the user's work; the new binary takes effect on the
   next normal relaunch. All old release backups, disposable test bundles, and
