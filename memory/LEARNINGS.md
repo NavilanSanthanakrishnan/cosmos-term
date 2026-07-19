@@ -141,6 +141,15 @@
   origin and cell metrics, and keep file-workspace backgrounds and glyphs on
   the same late quad layer so covered terminal text and cursors cannot bleed
   through.
+- Pane focus and presentation ownership are different state. Key the file
+  surface to the inner tmux `pane_id` where it was explicitly opened, query
+  snapshots for every pane on that server, and refresh the owner's geometry
+  without reassigning it when active focus changes. This keeps positional
+  selection stable while still following real swaps, resizes, and deletion.
+  An inactive owner must not capture terminal input even when its surface is
+  in edit mode. Use server-wide pane snapshots plus a window ID so an inactive
+  tmux window can hide and later restore its surface instead of looking like a
+  deleted owner.
 - A tmux file preview should be a visual overlay, not a competing keyboard
   mode. After handling explicit product shortcuts, return all other preview
   keys to the normal terminal pipeline so command prompts, copy mode, key

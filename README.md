@@ -107,18 +107,24 @@ returns keyboard focus to that pane.
 ## File workspace
 
 `Command+S` switches only the focused native or tmux pane between its live
-terminal and file workspace. Other panes stay visible, live, and interactive.
-The workspace starts empty: select a file from the left Explorer to load it.
-Changing to a pane with a different working directory resets a clean file
-workspace instead of carrying the old file into the new pane.
+terminal and file workspace. The workspace stays attached to that pane while
+normal pane-navigation commands change focus; pressing `Command+S` in another
+pane deliberately moves the workspace there. Other panes stay visible, live,
+and interactive. The workspace starts empty: select a file from the left
+Explorer to load it.
 
 Inside tmux, preview is a visual overlay rather than a separate keyboard
 surface. Every non-Cosmos key continues through the live tmux pane, including
 configured prefixes, command prompts, copy mode, key tables, repeat bindings,
-and direct `bind-key -n` bindings. The overlay follows the newly active tmux
-pane, and selecting a file does not let Explorer focus intercept tmux input.
-Edit mode owns text input deliberately, while the configured `prefix` and
-`prefix2` remain available for tmux commands.
+and direct `bind-key -n` bindings. Selecting pane 1, pane 2, or another tmux
+target changes focus without making the overlay jump sides. A real tmux
+`swap-pane` or resize moves/resizes the overlay because it follows the owning
+pane ID and geometry. Switching tmux windows hides the workspace with its
+owner and restores it when that window returns. Selecting a file does not let
+Explorer focus intercept tmux input. Edit mode owns text only while its pane
+is active; tmux navigation and input work normally after focusing another
+pane, and the configured `prefix` and `prefix2` remain available for tmux
+commands.
 
 Markdown opens as a formatted document with headings, lists, quotes, code
 blocks, task markers, rules, and visible link destinations. Other UTF-8 text

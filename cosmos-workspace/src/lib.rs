@@ -616,7 +616,9 @@ pub struct PaneContext {
     pub foreground_process: Option<String>,
     pub source: ContextSource,
     pub tmux_pane_id: Option<String>,
+    pub tmux_window_id: Option<String>,
     pub tmux_geometry: Option<TmuxPaneGeometry>,
+    pub tmux_panes: Vec<TmuxPaneSnapshot>,
     pub tmux_prefixes: Vec<String>,
     pub error: Option<String>,
 }
@@ -629,12 +631,22 @@ pub struct TmuxPaneGeometry {
     pub height: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TmuxPaneSnapshot {
+    pub path: PathBuf,
+    pub pane_id: String,
+    pub window_id: String,
+    pub geometry: TmuxPaneGeometry,
+}
+
 impl PaneContext {
     pub fn resolve(request: PaneContextRequest) -> Self {
         let mut cwd = None;
         let mut source = ContextSource::Unknown;
         let mut tmux_pane_id = None;
+        let mut tmux_window_id = None;
         let mut tmux_geometry = None;
+        let mut tmux_panes = vec![];
         let mut tmux_prefixes = vec![];
         let mut error = None;
 
@@ -646,7 +658,9 @@ impl PaneContext {
                 ) {
                     Ok(context) => {
                         tmux_pane_id = Some(context.pane_id);
+                        tmux_window_id = Some(context.window_id);
                         tmux_geometry = Some(context.geometry);
+                        tmux_panes = context.panes;
                         tmux_prefixes = context.prefixes;
                         let path = context.path;
                         cwd = Some(path);
@@ -688,7 +702,9 @@ impl PaneContext {
             foreground_process: request.foreground_process,
             source,
             tmux_pane_id,
+            tmux_window_id,
             tmux_geometry,
+            tmux_panes,
             tmux_prefixes,
             error,
         }
@@ -706,8 +722,50 @@ pub fn process_is_tmux(process: Option<&str>) -> bool {
 pub struct TmuxPaneContext {
     pub path: PathBuf,
     pub pane_id: String,
+    pub window_id: String,
     pub geometry: TmuxPaneGeometry,
+    pub panes: Vec<TmuxPaneSnapshot>,
     pub prefixes: Vec<String>,
+}
+
+const TMUX_PREFIXES_MARKER: &str = "__COSMOS_PREFIXES__";
+const TMUX_PANES_MARKER: &str = "__COSMOS_PANES__";
+
+fn parse_tmux_pane_snapshot(value: &str) -> Result<TmuxPaneSnapshot, String> {
+    let mut fields = value.split('\u{1f}');
+    let path = fields.next().unwrap_or_default();
+    if path.is_empty() {
+        return Err("tmux returned an empty pane path".to_string());
+    }
+    let pane_id = fields
+        .next()
+        .filter(|pane_id| !pane_id.is_empty())
+        .ok_or_else(|| "tmux omitted pane_id".to_string())?;
+    let window_id = fields
+        .next()
+        .filter(|window_id| !window_id.is_empty())
+        .ok_or_else(|| "tmux omitted window_id".to_string())?;
+    let parse_dimension = |name: &str, value: Option<&str>| {
+        value
+            .ok_or_else(|| format!("tmux omitted {name}"))?
+            .parse::<usize>()
+            .map_err(|err| format!("invalid tmux {name}: {err}"))
+    };
+    let geometry = TmuxPaneGeometry {
+        left: parse_dimension("pane_left", fields.next())?,
+        top: parse_dimension("pane_top", fields.next())?,
+        width: parse_dimension("pane_width", fields.next())?,
+        height: parse_dimension("pane_height", fields.next())?,
+    };
+    if geometry.width == 0 || geometry.height == 0 {
+        return Err("tmux returned an empty pane geometry".to_string());
+    }
+    Ok(TmuxPaneSnapshot {
+        path: PathBuf::from(path),
+        pane_id: pane_id.to_string(),
+        window_id: window_id.to_string(),
+        geometry,
+    })
 }
 
 fn parse_tmux_pane_context(value: &str) -> Result<TmuxPaneContext, String> {
@@ -715,42 +773,29 @@ fn parse_tmux_pane_context(value: &str) -> Result<TmuxPaneContext, String> {
     let pane = lines
         .next()
         .ok_or_else(|| "tmux returned an empty pane context".to_string())?;
-    let mut fields = pane.split('\u{1f}');
-    let path = fields.next().unwrap_or_default();
-    if path.is_empty() {
-        return Err("tmux returned an empty pane path".to_string());
+    let active = parse_tmux_pane_snapshot(pane)?;
+    let mut prefixes = vec![];
+    let mut panes = vec![];
+    let mut parsing_panes = false;
+    for line in lines.map(str::trim) {
+        match line {
+            TMUX_PREFIXES_MARKER => parsing_panes = false,
+            TMUX_PANES_MARKER => parsing_panes = true,
+            "" => {}
+            pane if parsing_panes => panes.push(parse_tmux_pane_snapshot(pane)?),
+            prefix if !prefix.eq_ignore_ascii_case("none") => prefixes.push(prefix.to_string()),
+            _ => {}
+        }
     }
-    let parse_dimension = |name: &str, value: Option<&str>| {
-        value
-            .ok_or_else(|| format!("tmux omitted {name}"))?
-            .parse::<usize>()
-            .map_err(|err| format!("invalid tmux {name}: {err}"))
-    };
-    let pane_id = fields
-        .next()
-        .filter(|pane_id| !pane_id.is_empty())
-        .ok_or_else(|| "tmux omitted pane_id".to_string())?;
-    let left = parse_dimension("pane_left", fields.next())?;
-    let top = parse_dimension("pane_top", fields.next())?;
-    let width = parse_dimension("pane_width", fields.next())?;
-    let height = parse_dimension("pane_height", fields.next())?;
-    if width == 0 || height == 0 {
-        return Err("tmux returned an empty pane geometry".to_string());
+    if !panes.iter().any(|pane| pane.pane_id == active.pane_id) {
+        panes.push(active.clone());
     }
-    let prefixes = lines
-        .map(str::trim)
-        .filter(|prefix| !prefix.is_empty() && !prefix.eq_ignore_ascii_case("none"))
-        .map(str::to_string)
-        .collect();
     Ok(TmuxPaneContext {
-        path: PathBuf::from(path),
-        pane_id: pane_id.to_string(),
-        geometry: TmuxPaneGeometry {
-            left,
-            top,
-            width,
-            height,
-        },
+        path: active.path,
+        pane_id: active.pane_id,
+        window_id: active.window_id,
+        geometry: active.geometry,
+        panes,
         prefixes,
     })
 }
@@ -762,7 +807,11 @@ pub fn tmux_pane_context(tty_name: &str, tmux_executable: &str) -> Result<TmuxPa
             "-p",
             "-t",
             tty_name,
-            "#{pane_current_path}\u{1f}#{pane_id}\u{1f}#{pane_left}\u{1f}#{pane_top}\u{1f}#{pane_width}\u{1f}#{pane_height}",
+            "#{pane_current_path}\u{1f}#{pane_id}\u{1f}#{window_id}\u{1f}#{pane_left}\u{1f}#{pane_top}\u{1f}#{pane_width}\u{1f}#{pane_height}",
+            ";",
+            "display-message",
+            "-p",
+            TMUX_PREFIXES_MARKER,
             ";",
             "show-options",
             "-gv",
@@ -771,6 +820,15 @@ pub fn tmux_pane_context(tty_name: &str, tmux_executable: &str) -> Result<TmuxPa
             "show-options",
             "-gv",
             "prefix2",
+            ";",
+            "display-message",
+            "-p",
+            TMUX_PANES_MARKER,
+            ";",
+            "list-panes",
+            "-a",
+            "-F",
+            "#{pane_current_path}\u{1f}#{pane_id}\u{1f}#{window_id}\u{1f}#{pane_left}\u{1f}#{pane_top}\u{1f}#{pane_width}\u{1f}#{pane_height}",
         ])
         .output()
         .map_err(|err| format!("unable to query tmux: {err}"))?;
@@ -2141,11 +2199,16 @@ mod tests {
     #[test]
     fn parses_tmux_path_and_active_pane_geometry() {
         let context = parse_tmux_pane_context(
-            "/tmp/cosmos project\u{1f}%7\u{1f}41\u{1f}3\u{1f}80\u{1f}24\nS-BSpace\nNone\n",
+            "/tmp/cosmos project\u{1f}%7\u{1f}@2\u{1f}41\u{1f}3\u{1f}80\u{1f}24\n\
+             __COSMOS_PREFIXES__\nS-BSpace\nNone\n\
+             __COSMOS_PANES__\n\
+             /tmp/left\u{1f}%6\u{1f}@2\u{1f}0\u{1f}3\u{1f}40\u{1f}24\n\
+             /tmp/cosmos project\u{1f}%7\u{1f}@2\u{1f}41\u{1f}3\u{1f}80\u{1f}24\n",
         )
         .unwrap();
         assert_eq!(context.path, PathBuf::from("/tmp/cosmos project"));
         assert_eq!(context.pane_id, "%7");
+        assert_eq!(context.window_id, "@2");
         assert_eq!(
             context.geometry,
             TmuxPaneGeometry {
@@ -2156,7 +2219,13 @@ mod tests {
             }
         );
         assert_eq!(context.prefixes, vec!["S-BSpace"]);
-        assert!(parse_tmux_pane_context("/tmp\u{1f}%1\u{1f}0\u{1f}0\u{1f}0\u{1f}24").is_err());
+        assert_eq!(context.panes.len(), 2);
+        assert_eq!(context.panes[0].pane_id, "%6");
+        assert_eq!(context.panes[0].window_id, "@2");
+        assert_eq!(context.panes[1].geometry, context.geometry);
+        assert!(
+            parse_tmux_pane_context("/tmp\u{1f}%1\u{1f}@0\u{1f}0\u{1f}0\u{1f}0\u{1f}24").is_err()
+        );
     }
 
     #[test]

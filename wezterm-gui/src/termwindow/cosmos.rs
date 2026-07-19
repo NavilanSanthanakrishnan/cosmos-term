@@ -12,7 +12,8 @@ use config::{DimensionContext, FontAttributes, FontWeight, TextStyle};
 use cosmos_workspace::{
     expand_home, DirectoryCache, ExplorerRow, ExplorerRowKind, ExplorerState, FileRequest,
     FileRevision, FollowMode, GitFileStatus, PaneContext, PaneContextRequest, ServiceResponse,
-    WorkspaceRoot, WorkspaceService, WorkspaceStatusSnapshot, MAX_SIDEBAR_WIDTH, MIN_SIDEBAR_WIDTH,
+    TmuxPaneGeometry, WorkspaceRoot, WorkspaceService, WorkspaceStatusSnapshot, MAX_SIDEBAR_WIDTH,
+    MIN_SIDEBAR_WIDTH,
 };
 use mux::pane::CachePolicy;
 use mux::tab::{SplitDirection, SplitRequest, SplitSize};
@@ -281,6 +282,8 @@ struct FileWorkspaceUi {
     resume_mode: FileWorkspaceMode,
     owner_pane_id: Option<usize>,
     owner_tmux_pane_id: Option<String>,
+    owner_tmux_window_id: Option<String>,
+    owner_tmux_geometry: Option<TmuxPaneGeometry>,
     owner_root: Option<PathBuf>,
     tmux_prefix_pending: bool,
     active_path: Option<PathBuf>,
@@ -304,6 +307,8 @@ impl Default for FileWorkspaceUi {
             resume_mode: FileWorkspaceMode::View,
             owner_pane_id: None,
             owner_tmux_pane_id: None,
+            owner_tmux_window_id: None,
+            owner_tmux_geometry: None,
             owner_root: None,
             tmux_prefix_pending: false,
             active_path: None,
@@ -333,13 +338,22 @@ impl FileWorkspaceUi {
         self.request_id
     }
 
-    fn reset_for_context(&mut self, pane_id: usize, tmux_pane_id: Option<String>, root: PathBuf) {
+    fn reset_for_context(
+        &mut self,
+        pane_id: usize,
+        tmux_pane_id: Option<String>,
+        tmux_window_id: Option<String>,
+        tmux_geometry: Option<TmuxPaneGeometry>,
+        root: PathBuf,
+    ) {
         self.request_id = self.request_id.wrapping_add(1).max(1);
         self.pending_request = None;
         self.mode = FileWorkspaceMode::View;
         self.resume_mode = FileWorkspaceMode::View;
         self.owner_pane_id = Some(pane_id);
         self.owner_tmux_pane_id = tmux_pane_id;
+        self.owner_tmux_window_id = tmux_window_id;
+        self.owner_tmux_geometry = tmux_geometry;
         self.owner_root = Some(root);
         self.tmux_prefix_pending = false;
         self.active_path = None;
@@ -1667,23 +1681,59 @@ impl TermWindow {
             .map(|root| root.path.clone())
     }
 
+    fn file_workspace_owns_context(&self, context: &PaneContext) -> bool {
+        self.explorer.file_workspace.owner_pane_id == Some(context.pane_id)
+            && self.explorer.file_workspace.owner_tmux_pane_id == context.tmux_pane_id
+    }
+
+    fn file_workspace_owns_active_context(&self) -> bool {
+        self.explorer
+            .active_context
+            .as_ref()
+            .map(|context| self.file_workspace_owns_context(context))
+            .unwrap_or(false)
+    }
+
     fn reconcile_file_workspace_context(&mut self) -> bool {
         if !self.explorer.file_workspace.visible() {
             return false;
         }
-        let (pane_id, tmux_pane_id) = match self.explorer.active_context.as_ref() {
-            Some(context) => (context.pane_id, context.tmux_pane_id.clone()),
+        let context = match self.explorer.active_context.clone() {
+            Some(context) => context,
             None => return false,
         };
+        let mut changed = false;
+        if self.explorer.file_workspace.owner_pane_id == Some(context.pane_id) {
+            if let Some(owner_tmux_pane_id) =
+                self.explorer.file_workspace.owner_tmux_pane_id.as_deref()
+            {
+                let owner_geometry = context
+                    .tmux_panes
+                    .iter()
+                    .find(|pane| pane.pane_id == owner_tmux_pane_id)
+                    .map(|pane| pane.geometry);
+                if owner_geometry.is_none() && !context.tmux_panes.is_empty() {
+                    self.return_to_terminal_workspace();
+                    return true;
+                }
+                if self.explorer.file_workspace.owner_tmux_geometry != owner_geometry {
+                    self.explorer.file_workspace.owner_tmux_geometry = owner_geometry;
+                    changed = true;
+                }
+            }
+        }
+        // Pane focus is independent from the file surface. Keep the viewer
+        // attached to its owner until Command+S or a file selection explicitly
+        // moves it to another pane.
+        if !self.file_workspace_owns_context(&context) {
+            return changed;
+        }
         let root = match self.active_workspace_root() {
             Some(root) => root,
-            None => return false,
+            None => return changed,
         };
-        let context_changed = self.explorer.file_workspace.owner_pane_id != Some(pane_id)
-            || self.explorer.file_workspace.owner_tmux_pane_id != tmux_pane_id
-            || self.explorer.file_workspace.owner_root.as_ref() != Some(&root);
-        if !context_changed {
-            return false;
+        if self.explorer.file_workspace.owner_root.as_ref() == Some(&root) {
+            return changed;
         }
         if self.explorer.file_workspace.dirty {
             self.explorer.file_workspace.error = Some(
@@ -1691,30 +1741,41 @@ impl TermWindow {
                     .to_string(),
             );
         } else {
-            self.explorer
-                .file_workspace
-                .reset_for_context(pane_id, tmux_pane_id, root);
+            self.explorer.file_workspace.reset_for_context(
+                context.pane_id,
+                context.tmux_pane_id,
+                context.tmux_window_id,
+                context.tmux_geometry,
+                root,
+            );
         }
         self.update_title();
         true
     }
 
     pub fn show_file_workspace(&mut self) {
-        let (pane_id, tmux_pane_id) = match self.explorer.active_context.as_ref() {
-            Some(context) => (context.pane_id, context.tmux_pane_id.clone()),
-            None => {
-                self.explorer.file_workspace.error =
-                    Some("Waiting for the active pane directory…".to_string());
-                self.explorer.file_workspace.mode = FileWorkspaceMode::View;
-                return;
-            }
-        };
+        let (pane_id, tmux_pane_id, tmux_window_id, tmux_geometry) =
+            match self.explorer.active_context.as_ref() {
+                Some(context) => (
+                    context.pane_id,
+                    context.tmux_pane_id.clone(),
+                    context.tmux_window_id.clone(),
+                    context.tmux_geometry,
+                ),
+                None => {
+                    self.explorer.file_workspace.error =
+                        Some("Waiting for the active pane directory…".to_string());
+                    self.explorer.file_workspace.mode = FileWorkspaceMode::View;
+                    return;
+                }
+            };
         let root = match self.active_workspace_root() {
             Some(root) => root,
             None => return,
         };
         let context_changed = self.explorer.file_workspace.owner_pane_id != Some(pane_id)
             || self.explorer.file_workspace.owner_tmux_pane_id != tmux_pane_id
+            || self.explorer.file_workspace.owner_tmux_window_id != tmux_window_id
             || self.explorer.file_workspace.owner_root.as_ref() != Some(&root);
         if context_changed {
             if self.explorer.file_workspace.dirty {
@@ -1723,10 +1784,16 @@ impl TermWindow {
                         .to_string(),
                 );
             } else {
-                self.explorer
-                    .file_workspace
-                    .reset_for_context(pane_id, tmux_pane_id, root);
+                self.explorer.file_workspace.reset_for_context(
+                    pane_id,
+                    tmux_pane_id,
+                    tmux_window_id,
+                    tmux_geometry,
+                    root,
+                );
             }
+        } else {
+            self.explorer.file_workspace.owner_tmux_geometry = tmux_geometry;
         }
         self.explorer.file_workspace.mode = self.explorer.file_workspace.resume_mode;
         self.explorer
@@ -1756,6 +1823,8 @@ impl TermWindow {
         if let Some(context) = self.explorer.active_context.as_ref() {
             self.explorer.file_workspace.owner_pane_id = Some(context.pane_id);
             self.explorer.file_workspace.owner_tmux_pane_id = context.tmux_pane_id.clone();
+            self.explorer.file_workspace.owner_tmux_window_id = context.tmux_window_id.clone();
+            self.explorer.file_workspace.owner_tmux_geometry = context.tmux_geometry;
         }
         self.explorer.file_workspace.owner_root = Some(root.clone());
         let request_id = self.explorer.file_workspace.next_request_id();
@@ -1864,7 +1933,7 @@ impl TermWindow {
             (key, modifiers),
             (KeyCode::Char('s' | 'S'), Modifiers::SUPER)
         ) {
-            if self.explorer.file_workspace.visible() {
+            if self.explorer.file_workspace.visible() && self.file_workspace_owns_active_context() {
                 self.return_to_terminal_workspace();
             } else {
                 self.show_file_workspace();
@@ -1887,13 +1956,18 @@ impl TermWindow {
         }
 
         if matches!((key, modifiers), (KeyCode::Char('\r'), Modifiers::SUPER)) {
-            self.save_file_workspace();
+            if self.file_workspace_owns_active_context() {
+                self.save_file_workspace();
+            }
             return true;
         }
         if matches!(
             (key, modifiers),
             (KeyCode::Char('e' | 'E'), Modifiers::SUPER)
         ) {
+            if !self.file_workspace_owns_active_context() {
+                return true;
+            }
             match self.explorer.file_workspace.mode {
                 FileWorkspaceMode::View => {
                     self.explorer.file_workspace.mode = FileWorkspaceMode::Edit;
@@ -1933,6 +2007,9 @@ impl TermWindow {
             (key, modifiers),
             (KeyCode::Char('d' | 'D'), mods) if mods == (Modifiers::SUPER | Modifiers::SHIFT)
         ) {
+            if !self.file_workspace_owns_active_context() {
+                return true;
+            }
             self.explorer.file_workspace.dirty = false;
             if self.reconcile_file_workspace_context() {
                 return true;
@@ -1948,6 +2025,13 @@ impl TermWindow {
         // Command+W and Command+Q. File-workspace commands above are consumed;
         // all other Command chords continue through the normal input map.
         if modifiers.contains(Modifiers::SUPER) {
+            return false;
+        }
+
+        // A viewer attached to another pane is presentation state for that
+        // pane, not a window-wide input mode. The newly focused pane receives
+        // normal terminal input.
+        if !self.file_workspace_owns_active_context() {
             return false;
         }
 
@@ -2375,6 +2459,17 @@ impl TermWindow {
     }
 
     fn file_workspace_bounds(&self) -> (usize, usize, usize, usize) {
+        if let (Some(owner_pane_id), Some(owner_tmux_window_id), Some(context)) = (
+            self.explorer.file_workspace.owner_pane_id,
+            self.explorer.file_workspace.owner_tmux_window_id.as_deref(),
+            self.explorer.active_context.as_ref(),
+        ) {
+            if context.pane_id == owner_pane_id
+                && context.tmux_window_id.as_deref() != Some(owner_tmux_window_id)
+            {
+                return (0, 0, 0, 0);
+            }
+        }
         let border = self.get_os_border();
         let tab_bar_height = if self.show_tab_bar {
             self.tab_bar_pixel_height().unwrap_or(0.) as usize
@@ -2399,42 +2494,32 @@ impl TermWindow {
         let (padding_left, padding_top) = self.padding_left_top();
         let cell_width = self.render_metrics.cell_size.width as usize;
         let cell_height = self.render_metrics.cell_size.height as usize;
-        let active = self
+        let owner_pane_id = self.explorer.file_workspace.owner_pane_id;
+        let owner = self
             .get_panes_to_render()
             .into_iter()
-            .find(|pane| pane.is_active);
-        let active = match active {
-            Some(active) => active,
+            .find(|pane| Some(pane.pane.pane_id()) == owner_pane_id);
+        let owner = match owner {
+            Some(owner) => owner,
             None => {
-                return (
-                    self.explorer_width(),
-                    top_bar,
-                    self.dimensions.pixel_width,
-                    window_bottom,
-                )
+                return (0, 0, 0, 0);
             }
         };
         let pane_left = border.left.get()
             + padding_left.max(0.0) as usize
-            + active.left.saturating_mul(cell_width);
+            + owner.left.saturating_mul(cell_width);
         let pane_top =
-            top_bar + padding_top.max(0.0) as usize + active.top.saturating_mul(cell_height);
-        let pane_right = pane_left.saturating_add(active.pixel_width).min(
+            top_bar + padding_top.max(0.0) as usize + owner.top.saturating_mul(cell_height);
+        let pane_right = pane_left.saturating_add(owner.pixel_width).min(
             self.dimensions
                 .pixel_width
                 .saturating_sub(border.right.get()),
         );
         let pane_bottom = pane_top
-            .saturating_add(active.pixel_height)
+            .saturating_add(owner.pixel_height)
             .min(window_bottom);
 
-        if let Some(geometry) = self
-            .explorer
-            .active_context
-            .as_ref()
-            .filter(|context| context.pane_id == active.pane.pane_id())
-            .and_then(|context| context.tmux_geometry)
-        {
+        if let Some(geometry) = self.explorer.file_workspace.owner_tmux_geometry {
             let left = pane_left
                 .saturating_add(geometry.left.saturating_mul(cell_width))
                 .min(pane_right);
