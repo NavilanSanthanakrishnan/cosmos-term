@@ -178,11 +178,10 @@ explorer and using independent application/runtime identities.
   archive passed `unzip -t`.
 - `Command+S` toggles only the focused native or inner tmux pane between its
   terminal and file workspace. Native pane bounds come from WezTerm; inner
-  tmux bounds come from the active pane's `left/top/width/height` cell
-  geometry. Every inactive pane remains rendered and live. A new pane context
-  opens a blank `FILE WORKSPACE` with no selected file or search field; the
-  user must choose a visible file from the left Explorer. A clean workspace
-  resets when the focused pane or its resolved CWD changes.
+  tmux bounds come from snapshots of every pane's ID and cell geometry. Every
+  inactive pane remains rendered and live. A new pane context opens a blank
+  `FILE WORKSPACE` with no selected file or search field; the user must choose
+  a visible file from the left Explorer.
 - Explorer file activation uses the native loader. Markdown is rendered with
   headings, lists, quotes, code, rules, task markers, visible link
   destinations, width-aware prose wrapping, common HTML cleanup, and table
@@ -245,6 +244,31 @@ explorer and using independent application/runtime identities.
   The workspace suite remains at 24 passing tests; full GUI/CLI/mux checks,
   release packaging, signature verification, plist validation, and
   `git diff --check` pass.
+- The file workspace is now owned by the native and inner tmux pane where
+  `Command+S` opened it. The user's positional `prefix+1`/`prefix+2` commands
+  change focus without making the workspace jump sides; `Command+S` on the
+  other pane deliberately transfers it. A real `swap-pane` follows the owner
+  ID, resize follows refreshed geometry, deleting the owner restores the
+  terminal, switching tmux windows hides/restores the surface with its owner,
+  and an inactive owner in Edit mode does not steal input from the focused
+  pane. The isolated captures are
+  `/tmp/cosmos-pane-owner-capture/02-owner-left-active-right.png`
+  (`91f976211189f891922c7a715cac10192d761e697903dc011a1a70765cc1df84`),
+  `04-real-swap-follows-owner-id.png`
+  (`e48bbfbe3e7c10d79ed7b44f179d6e0fcd2db511bc3961bb963d2ac7d69a68c9`),
+  `05-owner-resized.png`
+  (`bf645d246190b4738e856f88498c1fc8154d9b7f3341bae69b913a6571b8c972`),
+  and `06-owner-removed.png`
+  (`6c78428aa412d8a3f1a2eab42d2294c5813d03603e7e07c9e0f997b359c03e1f`).
+  A second dedicated server verified window persistence with
+  `/tmp/cosmos-pane-window-capture/01-owner-window-specific.png`
+  (`d0ff82bf996b9fed0ea55538ad63bac61d9af16c86245e7638a8bdb78f62f686`),
+  `02-away-window-hidden.png`
+  (`d7ffce157307b54aa8f005c4dad76758c764246c59144ef39d718ed9d6b0d704`),
+  and `03-owner-window-restored.png`
+  (`001ba780a72601b14c6b5a8f762b1a696487754952bc39bf594c36003ac36a8d`).
+  The dedicated app/server/root were removed, and default tmux still had no
+  clients.
 
 ## Verification commands
 

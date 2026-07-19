@@ -6,9 +6,9 @@ Cosmos Term is a direct WezTerm fork with a native left-side workspace
 Explorer. The terminal engine remains WezTerm: PTYs, tabs, splits, mux domains,
 rendering, fonts, input handling, and Lua configuration continue to use the
 existing implementation. The Explorer and file workspace are composed into
-the same native window and render pipeline. File mode overlays only the
-focused native pane's bounds or the focused inner tmux pane's cell geometry;
-it never replaces, restarts, or detaches the underlying terminal/tmux pane.
+the same native window and render pipeline. File mode overlays only its owning
+native pane's bounds or inner tmux pane's cell geometry; it never replaces,
+restarts, or detaches the underlying terminal/tmux pane.
 
 Cosmos deliberately avoids an Electron wrapper or separate editor process.
 Its file workspace is a bounded native viewer/editor for quick inspection and
@@ -28,8 +28,8 @@ This crate owns UI-independent workspace behavior:
 - workspace-confined UTF-8 file loading
 - revision-checked, permission-preserving atomic text saves
 - row generation for expanded directories
-- pane-context resolution for native panes and tmux, including active tmux
-  pane geometry
+- pane-context resolution for native panes and tmux, including active identity
+  plus snapshots of every inner pane's geometry
 - non-blocking Git status snapshots and porcelain parsing
 - read-only Codex usage snapshots and native active-process counting
 - native system-wide CPU and occupied-memory snapshots
@@ -64,9 +64,9 @@ The native window adapter owns:
 - mouse hit targets, scrolling, divider drag, and row activation
 - keyboard navigation and root prompts
 - spawning selected directories into tabs or splits
-- switching only the focused native/tmux pane surface between the live
+- switching only the selected native/tmux pane surface between the live
   terminal, an initially empty file workspace, formatted Markdown/text
-  preview, and text edit mode
+  preview, and text edit mode, then retaining that pane as the surface owner
 - file-workspace mouse/keyboard routing, document scrolling, line-numbered
   editing, dirty state, and native mode/path header
 - a native Code OSS Dark Modern status bar that reserves 22 logical pixels
@@ -114,7 +114,9 @@ foreground process and TTY are also inspected. When the foreground process is
 
 ```sh
 tmux display-message -p -t <client-tty> \
-  "#{pane_current_path}\x1f#{pane_left}\x1f#{pane_top}\x1f#{pane_width}\x1f#{pane_height}"
+  "#{pane_current_path}\x1f#{pane_id}\x1f#{window_id}\x1f#{pane_left}\x1f#{pane_top}\x1f#{pane_width}\x1f#{pane_height}"
+tmux list-panes -a -F \
+  "#{pane_current_path}\x1f#{pane_id}\x1f#{window_id}\x1f#{pane_left}\x1f#{pane_top}\x1f#{pane_width}\x1f#{pane_height}"
 ```
 
 The process inherits the GUI's `TMUX` environment and therefore queries the
@@ -124,11 +126,17 @@ not depend on Homebrew being present in its reduced `PATH`. If the query
 fails, the explorer keeps the terminal usable, falls back to reported or
 last-known context, and displays the error in the sidebar.
 
-The returned cell geometry is translated through the outer WezTerm pane's
-pixel origin and cell metrics. The file surface is then painted as an opaque,
-late overlay inside only that rectangle. This keeps every inactive native or
-tmux pane rendered normally while preventing the covered terminal's glyphs or
-cursor from bleeding through.
+The active identity chooses the Explorer root. When the file workspace opens,
+that native and inner pane identity becomes its owner. The corresponding cell
+geometry is translated through the outer WezTerm pane's pixel origin and cell
+metrics, and the file surface is painted as an opaque late overlay inside only
+that rectangle. Ordinary focus changes do not reassign the owner; positional
+pane selection therefore cannot make the surface jump sides. A real tmux
+swap or resize changes the owning pane's snapshot and moves or resizes the
+surface with it. Server-wide snapshots distinguish a pane deleted from one
+merely hidden in another tmux window: changing windows hides the surface, and
+returning to the owner's window restores it. Removing the owner restores
+terminal mode.
 
 The same tmux context request reads the server's global `prefix` and `prefix2`
 options and records the active inner `pane_id`. In preview mode the file
@@ -139,11 +147,13 @@ and direct no-prefix bindings even while the file surface is painted. The
 Explorer key handler observes the same gate because selecting a file can leave
 the sidebar visually focused.
 
-Edit mode deliberately owns text input. There, raw input still recognizes a
-configured prefix before Cosmos's normal key map encodes it and passes the
-prefix plus the next command key to tmux. The inner pane ID distinguishes two
-tmux panes that share a CWD, while geometry changes from resizing alone do not
-reset the file workspace.
+Edit mode deliberately owns text input only while its owner is active. There,
+raw input still recognizes a configured prefix before Cosmos's normal key map
+encodes it and passes the prefix plus the next command key to tmux. After focus
+moves away, ordinary input belongs to the newly active terminal even if the
+owner remains in edit mode. Inner pane ID is presentation ownership; active
+pane ID is input focus. Keeping those values separate also distinguishes panes
+that share a CWD without resetting on ordinary resize.
 
 Context requests run approximately twice per second, independently from
 directory loading. This makes native focus and tmux pane changes visible
@@ -153,10 +163,12 @@ WezTerm reports for native and remote-aware shells.
 ## File workspace
 
 `Command+S` toggles between terminal painting and the file workspace for the
-focused native or tmux pane. A new pane context has no selected file; files
-load only through a visible Explorer row or the `COSMOS_FILE_OPEN`
-shell-integration user variable. The current pane's exact resolved CWD is the
-security and display root.
+focused native or tmux pane. Once opened, the surface remains attached to that
+pane while focus moves elsewhere. `Command+S` on its owner closes it;
+`Command+S` on another pane deliberately transfers the single workspace to
+that pane. A new pane context has no selected file; files load only through a
+visible Explorer row or the `COSMOS_FILE_OPEN` shell-integration user variable.
+The owning pane's exact resolved CWD is the security and display root.
 
 Loads canonicalize both root and target, reject paths outside the root, reject
 binary data, and cap editable content at 2 MiB. Markdown is parsed with

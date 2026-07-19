@@ -212,25 +212,40 @@ Verify:
 - `Command+S` overlays only the first tmux pane rectangle; the second pane
   remains visible and its terminal content does not bleed through the overlay
 - `tmux -S "$sock" select-pane -t <second-pane>` resolves `/path/two`
-- after returning to terminal mode, `Command+S` overlays only the second pane
-  rectangle and leaves the first pane visible
+- while the first pane's workspace remains visible, use positional selection
+  such as the configured `<prefix> 2` and `<prefix> 1`; confirm focus changes
+  but the workspace remains attached to the first pane instead of swapping
+  sides
+- press `Command+S` while the second pane is active; confirm this explicit
+  action moves the single workspace to the second pane and leaves the first
+  pane visible
 - while the file workspace remains visible, use the server's configured tmux
   prefix plus pane-navigation command in both directions; confirm tmux changes
-  the active pane, the overlay follows it, and neither command key appears in
-  either shell
+  the active pane, the overlay stays with its owner, and neither command key
+  appears in either shell
+- enter workspace edit mode, navigate to the other pane, and trigger a
+  disposable direct binding; confirm the inactive editor does not capture the
+  newly focused pane's input
+- run `tmux -S "$sock" swap-pane` and confirm the workspace moves with its
+  owning pane ID; resize that pane and confirm the overlay follows its new
+  geometry without resetting
 - open the tmux command prompt with `<prefix> :`, type a multi-character
   command such as `select-pane -R`, and press Return; confirm it executes while
   the file preview remains visible
 - enter copy mode with `<prefix> [`, confirm `#{pane_in_mode}` is `1`, then
   press the configured copy-mode exit key and confirm it returns to `0`
 - create and revisit a tmux window with the normal window bindings; confirm
-  the active window and overlay context follow tmux
+  the workspace is hidden while its owning window is away and restored in the
+  same pane when that window returns
 - add a disposable `bind-key -n` binding only to the dedicated server and
   confirm it executes without a prefix while preview remains visible
 - click a file or the Explorer surface so the sidebar is visually focused,
   then confirm a disposable direct binding on an Explorer key such as `R`
   still reaches tmux instead of triggering an Explorer action
 - the terminal remains responsive
+- as the final destructive check, kill the owning pane only on the dedicated
+  server and confirm Cosmos returns to terminal mode while the remaining pane
+  stays usable
 
 Stop only the test Cosmos process and run
 `tmux -S "$sock" kill-server`. Compare the default tmux client list with the
