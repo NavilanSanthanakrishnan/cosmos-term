@@ -2028,6 +2028,7 @@ impl TermWindow {
     ) -> anyhow::Result<()> {
         self.render_explorer_text(
             layers,
+            1,
             text,
             top,
             left,
@@ -2052,6 +2053,7 @@ impl TermWindow {
     ) -> anyhow::Result<()> {
         self.render_explorer_text(
             layers,
+            1,
             glyph,
             top,
             left,
@@ -2067,6 +2069,7 @@ impl TermWindow {
     fn render_explorer_text(
         &mut self,
         layers: &mut TripleLayerQuadAllocator,
+        layer_num: usize,
         text: &str,
         top: f32,
         left: f32,
@@ -2136,7 +2139,7 @@ impl TermWindow {
                     if pos_x + glyph_width > computed.content_rect.max_x() {
                         break;
                     }
-                    let mut quad = layers.allocate(1)?;
+                    let mut quad = layers.allocate(layer_num)?;
                     let sprite_y = computed.content_rect.min_y().round() + top_offset;
                     quad.set_position(
                         pos_x + left_offset,
@@ -2164,7 +2167,7 @@ impl TermWindow {
                             (pos_x + (glyph.x_offset + glyph.bearing_x).get() as f32).round();
                         let glyph_width = texture.coords.size.width as f32 * glyph.scale as f32;
                         let glyph_height = texture.coords.size.height as f32 * glyph.scale as f32;
-                        let mut quad = layers.allocate(1)?;
+                        let mut quad = layers.allocate(layer_num)?;
                         quad.set_position(
                             glyph_x + left_offset,
                             pos_y,
@@ -2234,6 +2237,7 @@ impl TermWindow {
     ) -> anyhow::Result<()> {
         self.render_explorer_text(
             layers,
+            2,
             text,
             top,
             left,
@@ -2257,13 +2261,13 @@ impl TermWindow {
         } else {
             0
         };
-        let top = border.top.get()
+        let top_bar = border.top.get()
             + if self.config.tab_bar_at_bottom {
                 0
             } else {
                 tab_bar_height
             };
-        let bottom = self.dimensions.pixel_height.saturating_sub(
+        let window_bottom = self.dimensions.pixel_height.saturating_sub(
             border.bottom.get()
                 + self.status_bar_height()
                 + if self.config.tab_bar_at_bottom {
@@ -2272,12 +2276,61 @@ impl TermWindow {
                     0
                 },
         );
-        (
-            self.explorer_width(),
-            top,
-            self.dimensions.pixel_width,
-            bottom,
-        )
+        let (padding_left, padding_top) = self.padding_left_top();
+        let cell_width = self.render_metrics.cell_size.width as usize;
+        let cell_height = self.render_metrics.cell_size.height as usize;
+        let active = self
+            .get_panes_to_render()
+            .into_iter()
+            .find(|pane| pane.is_active);
+        let active = match active {
+            Some(active) => active,
+            None => {
+                return (
+                    self.explorer_width(),
+                    top_bar,
+                    self.dimensions.pixel_width,
+                    window_bottom,
+                )
+            }
+        };
+        let pane_left = border.left.get()
+            + padding_left.max(0.0) as usize
+            + active.left.saturating_mul(cell_width);
+        let pane_top =
+            top_bar + padding_top.max(0.0) as usize + active.top.saturating_mul(cell_height);
+        let pane_right = pane_left.saturating_add(active.pixel_width).min(
+            self.dimensions
+                .pixel_width
+                .saturating_sub(border.right.get()),
+        );
+        let pane_bottom = pane_top
+            .saturating_add(active.pixel_height)
+            .min(window_bottom);
+
+        if let Some(geometry) = self
+            .explorer
+            .active_context
+            .as_ref()
+            .filter(|context| context.pane_id == active.pane.pane_id())
+            .and_then(|context| context.tmux_geometry)
+        {
+            let left = pane_left
+                .saturating_add(geometry.left.saturating_mul(cell_width))
+                .min(pane_right);
+            let top = pane_top
+                .saturating_add(geometry.top.saturating_mul(cell_height))
+                .min(pane_bottom);
+            let right = left
+                .saturating_add(geometry.width.saturating_mul(cell_width))
+                .min(pane_right);
+            let bottom = top
+                .saturating_add(geometry.height.saturating_mul(cell_height))
+                .min(pane_bottom);
+            (left, top, right, bottom)
+        } else {
+            (pane_left, pane_top, pane_right, pane_bottom)
+        }
     }
 
     pub fn paint_file_workspace(
@@ -2300,13 +2353,13 @@ impl TermWindow {
 
         self.filled_rectangle(
             layers,
-            0,
+            2,
             euclid::rect(left as f32, top as f32, width as f32, (bottom - top) as f32),
             FILE_BG.to_linear_tuple_rgba(),
         )?;
         self.filled_rectangle(
             layers,
-            0,
+            2,
             euclid::rect(left as f32, top as f32, width as f32, header_height as f32),
             FILE_HEADER_BG.to_linear_tuple_rgba(),
         )?;
@@ -2334,7 +2387,7 @@ impl TermWindow {
         if self.file_workspace_item_hovered(&FileWorkspaceUiItem::TerminalTab) {
             self.filled_rectangle(
                 layers,
-                0,
+                2,
                 euclid::rect(
                     terminal_x as f32,
                     (top + scale(6)) as f32,
@@ -2404,7 +2457,7 @@ impl TermWindow {
             if hovered || mode == FileWorkspaceMode::Edit {
                 self.filled_rectangle(
                     layers,
-                    0,
+                    2,
                     euclid::rect(
                         action_x as f32,
                         (top + scale(6)) as f32,
@@ -2615,7 +2668,7 @@ impl TermWindow {
                 if line.kind == DocumentLineKind::Code {
                     self.filled_rectangle(
                         layers,
-                        0,
+                        2,
                         euclid::rect(
                             body_left as f32,
                             y as f32,
