@@ -217,13 +217,16 @@ explorer and using independent application/runtime identities.
   WezTerm processes were unchanged.
 - The exact signed binary installed at `/Applications/Cosmos Term.app` has
   SHA-256
-  `6069d5083b805273571de324f92688eb47078ce4386ee7ac9b9a85bfa808258e`.
-  Its bundle version is `20260718-230405-148aaa0d`, which identifies the
-  public merge containing the implementation.
-  Existing PID 71709 predates that on-disk replacement and was deliberately
-  left alive to preserve the user's work; the new binary takes effect on the
-  next normal relaunch. All old release backups, disposable test bundles, and
-  the generated `dist` bundle were deleted;
+  `508a55d03eabffc0de86a9ff8f0784be01a95f5ad2b0fd342e9595e05fd17ea9`.
+  Its short bundle version is `20260718-235004-74aafb0c`, which identifies
+  public merge `74aafb0c7f30169b56901da791b50b53e8a64454`.
+  No installed Cosmos process was running during replacement. The merged
+  application is now open as PID 186, and default tmux still has no clients.
+  The installed-window capture is
+  `/tmp/cosmos-pane-owner-capture/07-installed-merged-app.png`
+  (`ad138af2cdc17c7a55aa8b2743c91e5f33af60ad747cb80a07c395555e408d9d`).
+  All old release backups, disposable test bundles, and the generated `dist`
+  bundle were deleted;
   `/Applications/Cosmos Term.app` is the only runnable Cosmos Term bundle
   outside the required source template.
 - Tmux file-preview mode is now keyboard-transparent after explicit Cosmos
