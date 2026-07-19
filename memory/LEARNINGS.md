@@ -183,3 +183,15 @@
   baseline for product-critical actions: synthetic `Command+Shift+S` and
   `Command+Shift+D` can lose the Command bit before raw-key routing. Prefer a
   tested single-modifier chord such as `Command+Return` for explicit save.
+- A tmux-aware sidebar keyboard mode must be explicit and owner-scoped. Reserve
+  a prefix command only while that pane's file surface is visible, intercept
+  only the documented navigation keys, pass unknown keys and every other
+  prefix command through, and release focus as soon as another pane becomes
+  active. Reusing ordinary Explorer focus is insufficient because mouse
+  selection and tmux input transparency have different semantics.
+- Diagnose apparent split corruption from the tmux grid outward. Compare
+  `#{client_width}`, each `#{pane_width}`, and in-pane `stty size` before
+  changing renderer geometry. Multi-column output produced before a split is
+  reflowed by tmux when the original pane narrows; if those three widths and
+  the painted divider agree, changing Cosmos's pixel offsets would introduce
+  a real terminal mismatch rather than fix the historical text.

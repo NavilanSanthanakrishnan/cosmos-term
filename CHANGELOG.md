@@ -19,6 +19,9 @@ history remains available in `docs/changelog.md` and the retained Git history.
   key tables, window and pane commands, repeat bindings, and direct no-prefix
   bindings continue working; configured prefixes also remain available while
   editing.
+- Added pane-local Explorer keyboard navigation with `<tmux prefix> 0`,
+  W/S one-row movement, Shift+W/Shift+S five-row movement, Return activation,
+  and automatic focus release when the active tmux pane changes.
 - Added formatted Markdown preview, UTF-8 text preview, line-numbered editing,
   native path/mode navigation, and immediate terminal return.
 - Added 2 MiB file limits, workspace-boundary enforcement, atomic saves,

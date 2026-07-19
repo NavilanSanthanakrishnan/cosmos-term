@@ -123,6 +123,46 @@ fn tmux_key_matches_event(binding: &str, key: &KeyCode, modifiers: Modifiers) ->
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExplorerKeyboardAction {
+    Move(isize),
+    Collapse,
+    Expand,
+    Activate,
+    Exit,
+}
+
+fn explorer_keyboard_action(key: &KeyCode, modifiers: Modifiers) -> Option<ExplorerKeyboardAction> {
+    match (key, modifiers.remove_positional_mods()) {
+        (KeyCode::Char('w'), Modifiers::NONE) | (KeyCode::Char('W'), Modifiers::NONE) => {
+            Some(ExplorerKeyboardAction::Move(-1))
+        }
+        (KeyCode::Char('s'), Modifiers::NONE) | (KeyCode::Char('S'), Modifiers::NONE) => {
+            Some(ExplorerKeyboardAction::Move(1))
+        }
+        (KeyCode::Char('w' | 'W'), Modifiers::SHIFT) => Some(ExplorerKeyboardAction::Move(-5)),
+        (KeyCode::Char('s' | 'S'), Modifiers::SHIFT) => Some(ExplorerKeyboardAction::Move(5)),
+        (KeyCode::UpArrow, Modifiers::NONE) => Some(ExplorerKeyboardAction::Move(-1)),
+        (KeyCode::DownArrow, Modifiers::NONE) => Some(ExplorerKeyboardAction::Move(1)),
+        (KeyCode::LeftArrow, Modifiers::NONE) | (KeyCode::Char('a' | 'A'), Modifiers::NONE) => {
+            Some(ExplorerKeyboardAction::Collapse)
+        }
+        (KeyCode::RightArrow, Modifiers::NONE) | (KeyCode::Char('d' | 'D'), Modifiers::NONE) => {
+            Some(ExplorerKeyboardAction::Expand)
+        }
+        (KeyCode::Char('\r'), Modifiers::NONE) => Some(ExplorerKeyboardAction::Activate),
+        (KeyCode::Char('\u{1b}'), Modifiers::NONE) => Some(ExplorerKeyboardAction::Exit),
+        _ => None,
+    }
+}
+
+fn is_tmux_explorer_toggle_key(key: &KeyCode, modifiers: Modifiers) -> bool {
+    matches!(
+        (key, modifiers.remove_positional_mods()),
+        (KeyCode::Char('0'), Modifiers::NONE)
+    )
+}
+
 const SIDEBAR_BG: RgbColor = RgbColor::new_8bpc(37, 37, 38);
 const DIVIDER: RgbColor = RgbColor::new_8bpc(43, 43, 43);
 const TEXT: RgbColor = RgbColor::new_8bpc(204, 204, 204);
@@ -286,6 +326,7 @@ struct FileWorkspaceUi {
     owner_tmux_geometry: Option<TmuxPaneGeometry>,
     owner_root: Option<PathBuf>,
     tmux_prefix_pending: bool,
+    explorer_keyboard_mode: bool,
     active_path: Option<PathBuf>,
     content: String,
     document_lines: Vec<DocumentLine>,
@@ -311,6 +352,7 @@ impl Default for FileWorkspaceUi {
             owner_tmux_geometry: None,
             owner_root: None,
             tmux_prefix_pending: false,
+            explorer_keyboard_mode: false,
             active_path: None,
             content: String::new(),
             document_lines: vec![],
@@ -356,6 +398,7 @@ impl FileWorkspaceUi {
         self.owner_tmux_geometry = tmux_geometry;
         self.owner_root = Some(root);
         self.tmux_prefix_pending = false;
+        self.explorer_keyboard_mode = false;
         self.active_path = None;
         self.content.clear();
         self.document_lines.clear();
@@ -458,6 +501,7 @@ impl FileWorkspaceUi {
             "dirty": self.dirty,
             "pending": self.pending_request,
             "error": self.error,
+            "explorer_keyboard_mode": self.explorer_keyboard_mode,
         });
         if let Ok(data) = serde_json::to_vec_pretty(&snapshot) {
             let _ = std::fs::write(path, data);
@@ -1435,6 +1479,7 @@ impl TermWindow {
     }
 
     pub fn blur_explorer(&mut self) {
+        self.explorer.file_workspace.explorer_keyboard_mode = false;
         if self.explorer.focused {
             self.explorer.focused = false;
             self.explorer.rows_dirty = true;
@@ -1694,6 +1739,41 @@ impl TermWindow {
             .unwrap_or(false)
     }
 
+    fn activate_selected_explorer_row(&mut self) {
+        if let Some(index) = self.explorer.selected_index() {
+            let file = self
+                .explorer
+                .rows
+                .get(index)
+                .filter(|row| row.kind == ExplorerRowKind::File)
+                .and_then(|row| row.path.clone());
+            if let Some(path) = file {
+                self.open_file_workspace_path(path);
+            } else {
+                self.explorer.toggle_row(index);
+            }
+        }
+    }
+
+    fn toggle_tmux_explorer_keyboard_mode(&mut self) {
+        let enabled = !self.explorer.file_workspace.explorer_keyboard_mode;
+        self.explorer.file_workspace.explorer_keyboard_mode = enabled;
+        if enabled {
+            self.focus_explorer();
+            if self.explorer.selected_index().is_none() && !self.explorer.rows.is_empty() {
+                self.explorer.set_selected_index(0);
+            }
+            self.explorer
+                .file_workspace
+                .trace_test_state("explorer_keyboard_entered");
+        } else {
+            self.blur_explorer();
+            self.explorer
+                .file_workspace
+                .trace_test_state("explorer_keyboard_exited");
+        }
+    }
+
     fn reconcile_file_workspace_context(&mut self) -> bool {
         if !self.explorer.file_workspace.visible() {
             return false;
@@ -1726,6 +1806,10 @@ impl TermWindow {
         // attached to its owner until Command+S or a file selection explicitly
         // moves it to another pane.
         if !self.file_workspace_owns_context(&context) {
+            if self.explorer.file_workspace.explorer_keyboard_mode {
+                self.blur_explorer();
+                changed = true;
+            }
             return changed;
         }
         let root = match self.active_workspace_root() {
@@ -1906,6 +1990,8 @@ impl TermWindow {
         }
         self.explorer.file_workspace.mode = FileWorkspaceMode::Terminal;
         self.explorer.file_workspace.tmux_prefix_pending = false;
+        self.explorer.file_workspace.explorer_keyboard_mode = false;
+        self.explorer.focused = false;
         log::debug!("cosmos file workspace: returned to terminal");
         self.explorer.file_workspace.error = None;
         self.explorer
@@ -1946,6 +2032,13 @@ impl TermWindow {
 
         if self.explorer.file_workspace.tmux_prefix_pending {
             self.explorer.file_workspace.tmux_prefix_pending = false;
+            if is_tmux_explorer_toggle_key(key, modifiers)
+                && self.tmux_file_workspace_preview_active()
+                && self.file_workspace_owns_active_context()
+            {
+                self.toggle_tmux_explorer_keyboard_mode();
+                return true;
+            }
             self.explorer
                 .file_workspace
                 .trace_test_state("tmux_key_passthrough");
@@ -1970,6 +2063,7 @@ impl TermWindow {
             }
             match self.explorer.file_workspace.mode {
                 FileWorkspaceMode::View => {
+                    self.blur_explorer();
                     self.explorer.file_workspace.mode = FileWorkspaceMode::Edit;
                     self.explorer.file_workspace.resume_mode = FileWorkspaceMode::Edit;
                     self.explorer.file_workspace.cursor =
@@ -2033,6 +2127,24 @@ impl TermWindow {
         // normal terminal input.
         if !self.file_workspace_owns_active_context() {
             return false;
+        }
+
+        // prefix+0 explicitly turns the Explorer into this tmux pane's
+        // keyboard surface. Only that mode reserves navigation keys; normal
+        // preview keeps every other key transparent to tmux.
+        if self.explorer.file_workspace.explorer_keyboard_mode {
+            match explorer_keyboard_action(key, modifiers) {
+                Some(ExplorerKeyboardAction::Move(delta)) => self.explorer.move_selection(delta),
+                Some(ExplorerKeyboardAction::Collapse) => self.explorer.collapse_or_parent(),
+                Some(ExplorerKeyboardAction::Expand) => self.explorer.expand_or_child(),
+                Some(ExplorerKeyboardAction::Activate) => self.activate_selected_explorer_row(),
+                Some(ExplorerKeyboardAction::Exit) => self.blur_explorer(),
+                None => return false,
+            }
+            if let Some(window) = self.window.as_ref() {
+                window.invalidate();
+            }
+            return true;
         }
 
         // Preview is only a visual surface for an inner tmux pane. Keep the
@@ -2178,21 +2290,7 @@ impl TermWindow {
             (KeyCode::DownArrow, Modifiers::NONE) => self.explorer.move_selection(1),
             (KeyCode::LeftArrow, Modifiers::NONE) => self.explorer.collapse_or_parent(),
             (KeyCode::RightArrow, Modifiers::NONE) => self.explorer.expand_or_child(),
-            (KeyCode::Char('\r'), Modifiers::NONE) => {
-                if let Some(index) = self.explorer.selected_index() {
-                    let file = self
-                        .explorer
-                        .rows
-                        .get(index)
-                        .filter(|row| row.kind == ExplorerRowKind::File)
-                        .and_then(|row| row.path.clone());
-                    if let Some(path) = file {
-                        self.open_file_workspace_path(path);
-                    } else {
-                        self.explorer.toggle_row(index);
-                    }
-                }
-            }
+            (KeyCode::Char('\r'), Modifiers::NONE) => self.activate_selected_explorer_row(),
             (KeyCode::Char('\r'), Modifiers::SUPER) => {
                 self.spawn_selected_explorer_directory(false)
             }
@@ -3598,4 +3696,46 @@ fn explorer_prompt_overlay(
     })
     .detach();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{explorer_keyboard_action, is_tmux_explorer_toggle_key, ExplorerKeyboardAction};
+    use ::window::{KeyCode, Modifiers};
+
+    #[test]
+    fn tmux_explorer_keyboard_navigation_is_explicit_and_bounded() {
+        assert!(is_tmux_explorer_toggle_key(
+            &KeyCode::Char('0'),
+            Modifiers::NONE
+        ));
+        assert!(!is_tmux_explorer_toggle_key(
+            &KeyCode::Char('1'),
+            Modifiers::NONE
+        ));
+        assert_eq!(
+            explorer_keyboard_action(&KeyCode::Char('w'), Modifiers::NONE),
+            Some(ExplorerKeyboardAction::Move(-1))
+        );
+        assert_eq!(
+            explorer_keyboard_action(&KeyCode::Char('s'), Modifiers::NONE),
+            Some(ExplorerKeyboardAction::Move(1))
+        );
+        assert_eq!(
+            explorer_keyboard_action(&KeyCode::Char('W'), Modifiers::SHIFT),
+            Some(ExplorerKeyboardAction::Move(-5))
+        );
+        assert_eq!(
+            explorer_keyboard_action(&KeyCode::Char('S'), Modifiers::SHIFT),
+            Some(ExplorerKeyboardAction::Move(5))
+        );
+        assert_eq!(
+            explorer_keyboard_action(&KeyCode::Char('\r'), Modifiers::NONE),
+            Some(ExplorerKeyboardAction::Activate)
+        );
+        assert_eq!(
+            explorer_keyboard_action(&KeyCode::Char('x'), Modifiers::NONE),
+            None
+        );
+    }
 }

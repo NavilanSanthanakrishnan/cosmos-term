@@ -147,6 +147,14 @@ and direct no-prefix bindings even while the file surface is painted. The
 Explorer key handler observes the same gate because selecting a file can leave
 the sidebar visually focused.
 
+`prefix+0` is the deliberate exception and enters a pane-owner-bound Explorer
+keyboard mode only while tmux preview is visible. Its small key set maps
+W/S to one-row movement, Shift+W/S to five-row movement, A/D and arrows to
+tree collapse/expand, Return to activation, and Escape to exit. Unknown keys
+and every other prefix command remain on the normal terminal pipeline.
+Changing the active tmux pane exits the mode, preventing a sidebar selection
+from capturing input or moving the file surface to another pane.
+
 Edit mode deliberately owns text input only while its owner is active. There,
 raw input still recognizes a configured prefix before Cosmos's normal key map
 encodes it and passes the prefix plus the next command key to tmux. After focus
