@@ -103,6 +103,14 @@ explorer and using independent application/runtime identities.
   (`17e72d43b92d38fd0da649ce13e5c65edc8ca6294875f89cb2b410d6e8772044`).
   The disposable GUI and dedicated tmux server were removed; live Cosmos PID
   664 and the default tmux client `/dev/ttys000 0 %0` were unchanged.
+- The source fix is public on `main` at code commit
+  `87c1773fe63d9a3eb2a13add684e95e83fc7f1be`. The commit uses `[skip ci]`;
+  no pull request was opened and no GitHub workflow was invoked or rerun. The
+  signed bundle installed in place at `/Applications/Cosmos Term.app` is
+  version `20260719-120710-87c1773f`, and its `cosmos-term-gui` SHA-256 is
+  `00d5728afb480a33791e68ee3fffc9eae40ab0f5a7e9f74a225731d156a63b41`.
+  Installation preserved live PID 664 and `/dev/ttys000 0 %0`; the running
+  process retains its old in-memory code until the user's next normal relaunch.
 - The horizontal-split regression was reproduced on a dedicated tmux 3.7b
   socket after a multi-column `ls`. Cosmos and `stty` both reported the exact
   100-column client split into 50/49-column panes, and the rendered divider
