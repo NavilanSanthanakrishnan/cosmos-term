@@ -1892,7 +1892,7 @@ impl TermWindow {
         }
 
         // Shell integrations and the CLI test harness can request the same
-        // native file-workspace transition as Command+P/sidebar activation.
+        // native file-workspace transition as selecting a sidebar file.
         // The loader still canonicalizes the path and rejects anything outside
         // the active pane's exact workspace root.
         if name == "COSMOS_FILE_OPEN" {
