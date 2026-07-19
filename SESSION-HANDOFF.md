@@ -218,26 +218,30 @@ explorer and using independent application/runtime identities.
   WezTerm processes were unchanged.
 - The exact signed binary installed at `/Applications/Cosmos Term.app` has
   SHA-256
-  `b0b89963eb5038a0b56000c31221ee08f170041e8a0ec1652ed558d0d45f4686`.
+  `3f0bc9d6084c0e171a3779b806d6bd0aa519dc7d0686515a5d1c394c7f0ea14f`.
   Existing PID 71709 predates that on-disk replacement and was deliberately
   left alive to preserve the user's work; the new binary takes effect on the
   next normal relaunch. All old release backups, disposable test bundles, and
   the generated `dist` bundle were deleted;
   `/Applications/Cosmos Term.app` is the only runnable Cosmos Term bundle
   outside the required source template.
-- While the file workspace is visible, Cosmos now reads the attached server's
-  configured `prefix` and `prefix2` and passes a recognized prefix plus exactly
-  one following tmux command through the raw-key pipeline. The active inner
-  `pane_id` is tracked separately from geometry and CWD. A dedicated two-pane
-  server using the user's `S-BSpace` prefix verified `prefix+d` moved the
-  workspace left → right and `prefix+a` moved it right → left without either
-  command appearing in a shell. Captures are
-  `/tmp/cosmos-tmux-nav-capture/03-prefix-d-final.png`
-  (`9cee3995315a3aeef1ffb46c81a29bd05069dbb3c60060b65ea244c66f2649ac`)
-  and `04-prefix-a-final.png`
-  (`e703a59b24a8ffaa2f7e74e3cf919b77492079a43cc1b7eff65eee31ccb0d38d`).
+- Tmux file-preview mode is now keyboard-transparent after explicit Cosmos
+  shortcuts are handled. The active inner `pane_id` remains tracked
+  separately from geometry and CWD, and edit mode retains raw configured
+  `prefix`/`prefix2` passthrough because it deliberately owns text input.
+  A dedicated two-pane server using the user's `S-BSpace` prefix verified
+  `prefix+d` and `prefix+a` pane movement, a multi-character `:` command
+  prompt, copy-mode entry and exit, new/previous-window commands, a repeated
+  key-table command, and direct `bind-key -n` commands while preview remained
+  visible. Explorer keyboard focus is also bypassed during tmux preview, so
+  selecting a file cannot re-capture tmux keys. The dedicated server and
+  disposable app were removed;
+  default tmux still had only `/dev/ttys031 16 %50 /Users/navilan`, and live
+  Cosmos PID 71709 was unchanged. The final capture is
+  `/tmp/cosmos-tmux-transparent-capture/file-preview-tmux-transparent-front.png`
+  (`a7d9f562dd2ac569ed0dc0378dbdec92442c90ee33a850465f4dff71d7671341`).
   The workspace suite remains at 24 passing tests; full GUI/CLI/mux checks,
-  packaging, signature verification, plist validation, and
+  release packaging, signature verification, plist validation, and
   `git diff --check` pass.
 
 ## Verification commands
