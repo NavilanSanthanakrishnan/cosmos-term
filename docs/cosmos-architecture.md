@@ -130,6 +130,15 @@ late overlay inside only that rectangle. This keeps every inactive native or
 tmux pane rendered normally while preventing the covered terminal's glyphs or
 cursor from bleeding through.
 
+The same tmux context request reads the server's global `prefix` and `prefix2`
+options and records the active inner `pane_id`. While the file workspace is
+visible, raw input recognizes a configured prefix before Cosmos's normal key
+map encodes it, then passes that prefix and exactly one following tmux command
+to the underlying terminal. This preserves custom pane-navigation bindings in
+both preview and edit modes without forwarding unrelated hidden shell input.
+The inner pane ID also distinguishes two tmux panes that share a CWD, while
+geometry changes from resizing alone do not reset the file workspace.
+
 Context requests run approximately twice per second, independently from
 directory loading. This makes native focus and tmux pane changes visible
 without shell hooks. OSC 7 remains useful because it improves the CWD that

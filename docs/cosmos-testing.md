@@ -214,6 +214,10 @@ Verify:
 - `tmux -S "$sock" select-pane -t <second-pane>` resolves `/path/two`
 - after returning to terminal mode, `Command+S` overlays only the second pane
   rectangle and leaves the first pane visible
+- while the file workspace remains visible, use the server's configured tmux
+  prefix plus pane-navigation command in both directions; confirm tmux changes
+  the active pane, the overlay follows it, and neither command key appears in
+  either shell
 - the terminal remains responsive
 
 Stop only the test Cosmos process and run
