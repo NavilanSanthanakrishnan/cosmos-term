@@ -1848,6 +1848,16 @@ impl TermWindow {
         }
     }
 
+    fn tmux_file_workspace_preview_active(&self) -> bool {
+        self.explorer.file_workspace.mode == FileWorkspaceMode::View
+            && self
+                .explorer
+                .active_context
+                .as_ref()
+                .and_then(|context| context.tmux_pane_id.as_ref())
+                .is_some()
+    }
+
     pub fn file_workspace_key_down(&mut self, key: &KeyCode, modifiers: Modifiers) -> bool {
         let modifiers = modifiers.remove_positional_mods();
         if matches!(
@@ -1938,6 +1948,14 @@ impl TermWindow {
         // Command+W and Command+Q. File-workspace commands above are consumed;
         // all other Command chords continue through the normal input map.
         if modifiers.contains(Modifiers::SUPER) {
+            return false;
+        }
+
+        // Preview is only a visual surface for an inner tmux pane. Keep the
+        // terminal input path intact so tmux key tables, prompts, modes,
+        // repeat bindings, and no-prefix bindings continue to work exactly as
+        // they do while the terminal is painted.
+        if self.tmux_file_workspace_preview_active() {
             return false;
         }
 
@@ -2063,6 +2081,11 @@ impl TermWindow {
 
     pub fn explorer_key_down(&mut self, key: &KeyCode, modifiers: Modifiers) -> bool {
         if !self.explorer.focused {
+            return false;
+        }
+        // Clicking the Explorer can leave it visually focused after opening a
+        // file. It must not become a second keyboard mode over a tmux preview.
+        if self.tmux_file_workspace_preview_active() {
             return false;
         }
         let plain_modifiers = modifiers.remove_positional_mods();
