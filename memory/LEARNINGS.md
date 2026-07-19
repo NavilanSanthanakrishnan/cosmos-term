@@ -189,6 +189,11 @@
   prefix command through, and release focus as soon as another pane becomes
   active. Reusing ordinary Explorer focus is insufficient because mouse
   selection and tmux input transparency have different semantics.
+- The macOS text-input pass can encode physical Shift+W/S as uppercase W/S
+  while omitting the Shift modifier. Explorer navigation must treat lowercase
+  unmodified W/S as one-row movement and uppercase unmodified W/S as the
+  five-row form, while also accepting explicit Shift events. A struct-level
+  modifier test alone does not cover the live path.
 - Diagnose apparent split corruption from the tmux grid outward. Compare
   `#{client_width}`, each `#{pane_width}`, and in-pane `stty size` before
   changing renderer geometry. Multi-column output produced before a split is

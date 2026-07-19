@@ -134,14 +134,19 @@ enum ExplorerKeyboardAction {
 
 fn explorer_keyboard_action(key: &KeyCode, modifiers: Modifiers) -> Option<ExplorerKeyboardAction> {
     match (key, modifiers.remove_positional_mods()) {
-        (KeyCode::Char('w'), Modifiers::NONE) | (KeyCode::Char('W'), Modifiers::NONE) => {
-            Some(ExplorerKeyboardAction::Move(-1))
+        (KeyCode::Char('w'), Modifiers::NONE) => Some(ExplorerKeyboardAction::Move(-1)),
+        (KeyCode::Char('s'), Modifiers::NONE) => Some(ExplorerKeyboardAction::Move(1)),
+        // macOS can fold Shift into the uppercase character before the
+        // non-binding input pass. Accept both that normalized form and the
+        // explicit Shift modifier so physical Shift+W/S always moves five.
+        (KeyCode::Char('W'), Modifiers::NONE)
+        | (KeyCode::Char('w' | 'W'), Modifiers::SHIFT) => {
+            Some(ExplorerKeyboardAction::Move(-5))
         }
-        (KeyCode::Char('s'), Modifiers::NONE) | (KeyCode::Char('S'), Modifiers::NONE) => {
-            Some(ExplorerKeyboardAction::Move(1))
+        (KeyCode::Char('S'), Modifiers::NONE)
+        | (KeyCode::Char('s' | 'S'), Modifiers::SHIFT) => {
+            Some(ExplorerKeyboardAction::Move(5))
         }
-        (KeyCode::Char('w' | 'W'), Modifiers::SHIFT) => Some(ExplorerKeyboardAction::Move(-5)),
-        (KeyCode::Char('s' | 'S'), Modifiers::SHIFT) => Some(ExplorerKeyboardAction::Move(5)),
         (KeyCode::UpArrow, Modifiers::NONE) => Some(ExplorerKeyboardAction::Move(-1)),
         (KeyCode::DownArrow, Modifiers::NONE) => Some(ExplorerKeyboardAction::Move(1)),
         (KeyCode::LeftArrow, Modifiers::NONE) | (KeyCode::Char('a' | 'A'), Modifiers::NONE) => {
@@ -3726,7 +3731,23 @@ mod tests {
             Some(ExplorerKeyboardAction::Move(-5))
         );
         assert_eq!(
+            explorer_keyboard_action(&KeyCode::Char('W'), Modifiers::NONE),
+            Some(ExplorerKeyboardAction::Move(-5))
+        );
+        assert_eq!(
+            explorer_keyboard_action(&KeyCode::Char('w'), Modifiers::SHIFT),
+            Some(ExplorerKeyboardAction::Move(-5))
+        );
+        assert_eq!(
             explorer_keyboard_action(&KeyCode::Char('S'), Modifiers::SHIFT),
+            Some(ExplorerKeyboardAction::Move(5))
+        );
+        assert_eq!(
+            explorer_keyboard_action(&KeyCode::Char('S'), Modifiers::NONE),
+            Some(ExplorerKeyboardAction::Move(5))
+        );
+        assert_eq!(
+            explorer_keyboard_action(&KeyCode::Char('s'), Modifiers::SHIFT),
             Some(ExplorerKeyboardAction::Move(5))
         );
         assert_eq!(

@@ -90,6 +90,19 @@ explorer and using independent application/runtime identities.
   prefix command still use the live tmux input path; focusing another tmux
   pane releases Explorer mode instead of transferring or swapping the file
   surface.
+- Physical macOS Shift+W/S input is accepted both with an explicit Shift flag
+  and in the uppercase-without-Shift form produced by the text-input pass.
+  An isolated packaged build verified `.cargo` to `base91` as a five-row
+  Shift+S jump, the reverse Shift+W jump, and Return opening
+  `docs/cli/ls-fonts.md` inside only the right tmux pane. The final captures
+  are `/tmp/cosmos-verified-captures/shift-s-five-rows.png`
+  (`d68ad2df238a8520ccd33339027b545e4144c32dba8a992a1dfefd9fcc603b87`),
+  `enter-opened-markdown.png`
+  (`3c3ba8c50df01045e05a209f08be9f2442258f8790f3c69286f80555ed0e8874`),
+  and `pane-owner-keyboard-transparent.png`
+  (`17e72d43b92d38fd0da649ce13e5c65edc8ca6294875f89cb2b410d6e8772044`).
+  The disposable GUI and dedicated tmux server were removed; live Cosmos PID
+  664 and the default tmux client `/dev/ttys000 0 %0` were unchanged.
 - The horizontal-split regression was reproduced on a dedicated tmux 3.7b
   socket after a multi-column `ls`. Cosmos and `stty` both reported the exact
   100-column client split into 50/49-column panes, and the rendered divider

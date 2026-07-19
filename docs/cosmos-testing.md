@@ -244,7 +244,9 @@ Verify:
   still reaches tmux instead of triggering an Explorer action
 - while preview owns the active pane, press `<prefix> 0`; confirm the Explorer
   receives the active selection, W/S move one row, Shift+W/Shift+S move five
-  rows, and Return opens the selected file in the same pane surface
+  rows, and Return opens the selected file in the same pane surface. Exercise
+  the Shift shortcuts through physical macOS key events because the text-input
+  pass can normalize them to uppercase W/S without a Shift modifier flag
 - while Explorer keyboard navigation is active, run a different tmux prefix
   command and confirm it still reaches tmux; change pane focus and confirm
   Explorer mode exits without moving or swapping the workspace

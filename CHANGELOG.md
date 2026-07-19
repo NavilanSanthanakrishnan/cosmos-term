@@ -22,6 +22,9 @@ history remains available in `docs/changelog.md` and the retained Git history.
 - Added pane-local Explorer keyboard navigation with `<tmux prefix> 0`,
   W/S one-row movement, Shift+W/Shift+S five-row movement, Return activation,
   and automatic focus release when the active tmux pane changes.
+- Made the five-row shortcuts accept macOS's normalized uppercase W/S events,
+  where the character can retain the Shift meaning after the modifier flag is
+  removed by the text-input pass.
 - Added formatted Markdown preview, UTF-8 text preview, line-numbered editing,
   native path/mode navigation, and immediate terminal return.
 - Added 2 MiB file limits, workspace-boundary enforcement, atomic saves,
