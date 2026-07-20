@@ -71,8 +71,9 @@ explorer and using independent application/runtime identities.
   authorization requirement. No AppleScript, accessibility scripting,
   CGEvent, browser automation, custom keyboard tool, or focus restoration was
   used. The official API has no explicit never-activate flag.
-- GitHub project workflows are removed. Validation is local; publishing must
-  not invoke or add GitHub Actions.
+- GitHub project workflows and Dependabot schedules are removed. Validation
+  and dependency review are local; publishing must not invoke or add GitHub
+  Actions.
 
 ## Verified behavior
 

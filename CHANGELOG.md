@@ -43,7 +43,8 @@ history remains available in `docs/changelog.md` and the retained Git history.
   audit records, manual-input pause, and process-wide deduplication.
 - Capped the bundled renderer at 30 FPS and moved prompt inspection behind a
   200 ms output quiet period to reduce GLX resume/streaming contention.
-- Removed the GitHub Actions workflow; project verification is local.
+- Removed the GitHub Actions workflow and Dependabot schedule; project
+  verification and dependency review are local.
 
 ## 0.1.0-alpha.1 — 2026-07-18
 
