@@ -7,9 +7,9 @@ Updated: 2026-07-20
 V1 is implemented, packaged, and installed at
 `/Applications/Cosmos Term.app`. The source repository is public at
 `https://github.com/NavilanSanthanakrishnan/cosmos-term`; the product launch
-and lightweight system-capacity footer are merged on `main`. The first public
+and lightweight system-capacity footer are merged on `main`. The latest public
 Apple-silicon prerelease is
-`https://github.com/NavilanSanthanakrishnan/cosmos-term/releases/tag/v0.1.0-alpha.1`.
+`https://github.com/NavilanSanthanakrishnan/cosmos-term/releases/tag/v0.1.0-alpha.2`.
 
 Cosmos Term is a native WezTerm fork, not a wrapper. It retains terminal tabs,
 splits, rendering, Lua configuration, and mux behavior while adding the left
@@ -64,13 +64,17 @@ explorer and using independent application/runtime identities.
   existing Codex processes were not stopped.
 - The official ChatGPT GUI marketplace Computer Use plugin is installed as
   `1.0.1000387`, and fresh signed Codex successfully authenticated through its
-  trusted `node_repl` wrapper. The updated service is
-  `26.710.1000387`. Calculator acceptance then stopped fail-closed because the
-  Computer Use service reported that it was not approved to use Calculator;
-  Safari was not touched. This is the remaining external per-app
-  authorization requirement. No AppleScript, accessibility scripting,
-  CGEvent, browser automation, custom keyboard tool, or focus restoration was
-  used. The official API has no explicit never-activate flag.
+  trusted `node_repl` wrapper. The updated service is `26.710.1000387`.
+  Official per-app approval is now retained for Calculator, Safari, and the
+  installed Cosmos Term. Calculator passed a UI-driven `2 + 2 = 4` acceptance
+  test; Safari returned a read-only Start Page state without navigation or
+  typing; Chrome remained frontmost throughout. The protected installed
+  Cosmos PID 40964 remained running and unaltered. Cosmos state capture timed
+  out after approval, so no current official screenshot file was produced and
+  the Cosmos-specific capture remains an open acceptance item. No AppleScript,
+  accessibility scripting, CGEvent, browser automation, custom keyboard tool,
+  or focus restoration was used. The official API has no explicit
+  never-activate flag.
 - GitHub project workflows and Dependabot schedules are removed. Validation
   and dependency review are local; publishing must not invoke or add GitHub
   Actions.
