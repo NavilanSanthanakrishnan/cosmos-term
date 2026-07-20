@@ -5,6 +5,8 @@ history remains available in `docs/changelog.md` and the retained Git history.
 
 ## Unreleased
 
+## 0.1.0-alpha.2 — 2026-07-20
+
 - Added a native right-side file workspace without replacing the live
   terminal/tmux pane.
 - Added a pane-aware `Command+S` terminal/file-workspace toggle and
