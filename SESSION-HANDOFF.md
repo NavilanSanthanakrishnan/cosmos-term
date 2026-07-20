@@ -42,10 +42,16 @@ explorer and using independent application/runtime identities.
   to an exact disposable `codex` pane. The full workspace suite has 28 passing
   tests; GUI/CLI/mux checks, release packaging, strict signature verification,
   plist validation, and `git diff --check` pass.
-- The current packaged candidate is
-  `dist/Cosmos Term.app`, bundle ID `com.navilan.cosmos-term`, bundle version
-  `20260720105132`. Live installed Cosmos PID 40964 and default tmux client
-  `/dev/ttys000 $3 %10` remain protected and unchanged.
+- The final package and only installed app are
+  `dist/Cosmos Term.app` and `/Applications/Cosmos Term.app`, bundle ID
+  `com.navilan.cosmos-term`, short version
+  `20260720-111529-498cf07e`, and bundle version `20260720111614`. Their
+  `cosmos-term-gui` SHA-256 is
+  `ba11a49ac770796085b74680f93db13fc314fcefe288e2121d195a12d35978b1`.
+  The package identifies source commit `498cf07e9`. Live installed Cosmos PID
+  40964 and default tmux client `/dev/ttys000 $3 %10` remained protected and
+  unchanged during atomic replacement; the running process retains its prior
+  in-memory executable until the user's next normal relaunch.
 - A background isolated launch with unique data/runtime roots averaged 0.395%
   CPU over 20 steady-state samples. `vmmap` reported 85.8 MiB resident and
   `footprint` recorded a 224.7 MiB peak. Its only child was `/bin/sleep`, the
