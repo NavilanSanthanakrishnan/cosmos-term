@@ -74,6 +74,19 @@ explorer and using independent application/runtime identities.
 - GitHub project workflows and Dependabot schedules are removed. Validation
   and dependency review are local; publishing must not invoke or add GitHub
   Actions.
+- Public prerelease `v0.1.0-alpha.2` targets
+  `d0f928bc27f07db97bd219f212cb484b784bd407` at
+  `https://github.com/NavilanSanthanakrishnan/cosmos-term/releases/tag/v0.1.0-alpha.2`.
+  Its 52,396,429-byte `Cosmos-Term-macos-arm64.zip` re-downloaded with
+  SHA-256
+  `d2aa1ce53a46cd9c05f1cef9f1ab09d5d7fbf789cb513cc03b9ef4979dd36ee4`;
+  checksum and `unzip -t` verification passed, and GitHub reports both assets
+  uploaded.
+- The first feature push briefly enqueued two GitHub Dependabot dynamic checks
+  even though Actions was disabled. One completed as failed before cancellation
+  reached it and the other was canceled. Neither was Cosmos CI or Codex work.
+  After deleting `.github/dependabot.yml`, the final release-notes head had zero
+  workflow runs.
 
 ## Verified behavior
 
