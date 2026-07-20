@@ -16,7 +16,9 @@ parsing, directory sorting/filtering, persistence, workspace-confined
 load/save, atomic-save cleanup, external-change conflict
 detection, structured Codex usage parsing, reset selection, exact
 executable-name process detection, CPU tick delta calculation, RAM label
-formatting, and native macOS capacity reads.
+formatting, native macOS capacity reads, strict preferred-prompt
+classification, fail-closed false positives, and a dedicated-socket targeted
+tmux prompt action.
 
 ## Release bundle
 
@@ -57,6 +59,15 @@ MiB peak. Its same-session pre-feature run measured 80 MiB current and 242 MiB
 peak; launch-to-launch renderer variation is larger than the capacity
 snapshot itself. The final design samples no faster than once per ten seconds
 and skips invalidation when raw page changes do not alter the visible label.
+
+The 2026-07-20 prompt-automation release candidate averaged 0.395% idle CPU
+across 20 steady-state samples in an isolated background launch. `vmmap`
+reported 85.8 MiB resident and `footprint` recorded a 224.7 MiB peak. Its only
+child was the requested `/bin/sleep`; its only named socket was under the
+isolated `COSMOS_TERM_RUNTIME_DIR`. A native sample found the Explorer workers
+blocked on channels and the event loop blocked in `kevent`/Mach message waits.
+The live Cosmos process and default tmux client were unchanged before and
+after cleanup.
 
 The high-water check must not show hundreds of MiB retained in empty
 `MALLOC_SMALL` regions. A native sample should show the Cosmos worker threads
@@ -183,6 +194,15 @@ Use only panes created in Cosmos Term.
     no status helper, shell loop, daemon, or repeated `ps`/`pgrep` process.
     Updating the active rollout should not trigger a full session-tree walk;
     broad discovery is rate-limited to once per 15 seconds.
+21. Open a long file in preview. Confirm W/S scroll one line,
+    Shift+W/Shift+S scroll five, A/D scroll one column, and
+    Shift+A/Shift+D scroll eight columns. Repeat in a tmux-owned file surface
+    and confirm a real tmux prefix is still buffered before its command, so
+    prefix+s and prefix+w reach tmux rather than scrolling the file.
+22. Confirm the footer initially reports `Prompts observe`.
+    `Command+Option+P` must cycle observe → active → off → observe, while
+    `Command+Option+Escape` must change immediately to off. Type in a candidate
+    pane and confirm automation pauses instead of racing manual input.
 
 ## Isolated tmux matrix
 
@@ -258,6 +278,12 @@ Verify:
   historical `ls` columns may reflow when tmux narrows the original pane, but
   Cosmos must not add a second width offset or corrupt the new pane
 - the terminal remains responsive
+- use an executable named exactly `codex` to render each complete whitelisted
+  selection fixture, then verify observe mode sends no key
+- enable active mode only in the isolated data root and verify the displayed
+  preferred digit is sent once without selecting the pane or window
+- show an approval, an incomplete prompt, a prompt in copy mode, and the same
+  text under a non-Codex executable; verify all receive no input
 - as the final destructive check, kill the owning pane only on the dedicated
   server and confirm Cosmos returns to terminal mode while the remaining pane
   stays usable

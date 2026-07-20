@@ -33,6 +33,8 @@ This crate owns UI-independent workspace behavior:
 - non-blocking Git status snapshots and porcelain parsing
 - read-only Codex usage snapshots and native active-process counting
 - native system-wide CPU and occupied-memory snapshots
+- strict Codex prompt classification, targeted tmux scanning and revalidation,
+  and metadata-only audit writes
 - filesystem change notification
 
 Five independent worker threads serve directory reads, on-demand file
@@ -80,9 +82,11 @@ remaining viewport.
 
 Explorer rows are cached and regenerated only after directory, selection,
 expansion, or scope changes; Git decorations are looked up from their separate
-snapshot during paint. The service tick runs at 50 ms while a worker request
-is pending and backs off to 500 ms while idle, so terminal painting does not
-imply filesystem work or a permanent high-frequency timer.
+snapshot during paint. The service tick runs at 50 ms while ordinary worker
+responses are pending and backs off to 500 ms while idle. Codex pane-output
+detection waits 200 ms for the terminal to settle, and tmux prompt scans are
+capped at one every two seconds. Terminal painting therefore does not imply
+filesystem work or a permanent high-frequency timer.
 
 ### Narrow upstream integration
 
@@ -224,6 +228,41 @@ On macOS, active loops are counted with the native process API and require an
 executable basename of exactly `codex`. Processes such as
 `codex-code-mode-host` are excluded. This design does not spawn `ps`, `pgrep`,
 Codex CLI calls, a daemon, or any persistent status helper.
+
+## Codex preferred-prompt automation
+
+The automation recognizes only three complete, versioned Codex prompt
+signatures: additional safety checks, approaching rate limits, and a model
+upgrade. Each classifier result contains the policy action, the exact rendered
+numeric shortcut, and a fingerprint derived from the bounded normalized
+prompt. A phrase by itself, duplicate target, unexpected option, stale prompt
+above nonempty composer rows, or any unrelated menu returns no match.
+
+Native mux-pane output records only a pending timestamp. After 200 ms without
+new output, Cosmos confirms the foreground executable basename is exactly
+`codex`, rejects overlays and conflicting file-workspace input ownership,
+reads bounded visible terminal rows, and classifies the prompt. This keeps
+foreground-process discovery and parsing out of rapid GLX streaming output.
+
+For tmux, the existing context worker resolves the server from the outer
+pane's TTY, lists only panes whose current command is exactly `codex`, rejects
+pane modes, and captures a bounded pane region without selecting or attaching
+it. Active mode rechecks command, pane mode, complete prompt, shortcut, and
+fingerprint immediately before sending one literal digit to the opaque target.
+The worker has a separate atomic action gate that defaults to disabled and is
+closed immediately when the mode changes away from active.
+
+Window-local candidate state is combined with process-wide target/fingerprint
+reservation, so multiple Cosmos views cannot act twice. Automation pauses for
+two seconds after manual input and keeps a handled fingerprint suppressed
+until the prompt clears. The persisted modes are `off`, `observe`, and
+`active`, with `observe` as the clean-install default. Audit JSONL includes
+only timestamp, mode, prompt kind, opaque target, policy action, and result.
+It never stores terminal cells, prompt wording, commands, paths, or
+conversation content.
+
+`Command+Option+P` cycles the modes. `Command+Option+Escape` is an immediate
+off switch that clears queued candidates and closes the worker action gate.
 
 ## System capacity
 

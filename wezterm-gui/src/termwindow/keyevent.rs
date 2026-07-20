@@ -273,6 +273,14 @@ impl super::TermWindow {
         // command would leave tmux waiting in its prefix table. For every
         // other command we replay the exact configured prefix first and then
         // let the command key continue through the ordinary input path.
+        let mut tmux_command_passthrough = false;
+        if is_down
+            && only_key_bindings == OnlyKeyBindings::No
+            && self.codex_prompt_automation_key_down(keycode, raw_modifiers)
+        {
+            context.invalidate();
+            return true;
+        }
         if is_down
             && only_key_bindings == OnlyKeyBindings::Yes
             && self.file_workspace_tmux_prefix_key_down(keycode, raw_modifiers)
@@ -310,6 +318,7 @@ impl super::TermWindow {
                         }
                     }
                 }
+                tmux_command_passthrough = true;
             }
         }
 
@@ -331,6 +340,7 @@ impl super::TermWindow {
             }
 
             if only_key_bindings == OnlyKeyBindings::No
+                && !tmux_command_passthrough
                 && self.file_workspace_key_down(&keycode, raw_modifiers)
             {
                 context.invalidate();
@@ -661,6 +671,9 @@ impl super::TermWindow {
             Some(pane) => pane,
             None => return,
         };
+        if window_key.key_is_down && !window_key.key.is_modifier() {
+            self.note_codex_prompt_manual_input(pane.pane_id());
+        }
 
         // The leader key is a kind of modal modifier key.
         // It is allowed to be active for up to the leader timeout duration,

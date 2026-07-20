@@ -10,18 +10,21 @@ use ::window::{
 use config::keyassignment::{KeyAssignment, SpawnCommand, SpawnTabDomain};
 use config::{DimensionContext, FontAttributes, FontWeight, TextStyle};
 use cosmos_workspace::{
-    expand_home, DirectoryCache, ExplorerRow, ExplorerRowKind, ExplorerState, FileRequest,
-    FileRevision, FollowMode, GitFileStatus, PaneContext, PaneContextRequest, ServiceResponse,
+    classify_codex_prompt, expand_home, process_is_codex, process_is_tmux, CodexPromptAuditEvent,
+    CodexPromptAutomationMode, CodexPromptMatch, DirectoryCache, ExplorerRow, ExplorerRowKind,
+    ExplorerState, FileRequest, FileRevision, FollowMode, GitFileStatus, PaneContext,
+    PaneContextRequest, ServiceResponse, TmuxCodexPromptChoiceResult, TmuxCodexPromptScan,
     TmuxPaneGeometry, WorkspaceRoot, WorkspaceService, WorkspaceStatusSnapshot, MAX_SIDEBAR_WIDTH,
     MIN_SIDEBAR_WIDTH,
 };
-use mux::pane::CachePolicy;
+use mux::pane::{CachePolicy, PaneId};
 use mux::tab::{SplitDirection, SplitRequest, SplitSize};
 use mux::Mux;
 use ordered_float::NotNan;
 use pulldown_cmark::{Event as MarkdownEvent, Options as MarkdownOptions, Parser, Tag};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
 use termwiz::cell::CellAttributes;
 use termwiz::color::RgbColor;
@@ -30,6 +33,7 @@ use termwiz::lineedit::{Action, BasicHistory, History, LineEditor, LineEditorHos
 use termwiz::surface::Change;
 use termwiz::terminal::Terminal;
 use unicode_width::UnicodeWidthStr;
+use wezterm_term::{KeyCode as PaneKeyCode, KeyModifiers as PaneKeyModifiers};
 
 // VS Code defines these values in logical CSS pixels. Convert the complete
 // explorer layout to physical pixels at the window DPI so its apparent size
@@ -64,6 +68,9 @@ const CONTEXT_POLL_INTERVAL: Duration = Duration::from_millis(500);
 const DIRECTORY_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 const GIT_STATUS_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 const WORKSPACE_STATUS_REFRESH_INTERVAL: Duration = Duration::from_secs(2);
+const CODEX_PROMPT_DEBOUNCE: Duration = Duration::from_millis(200);
+const CODEX_PROMPT_MANUAL_INPUT_PAUSE: Duration = Duration::from_secs(2);
+const CODEX_PROMPT_TMUX_SCAN_INTERVAL: Duration = Duration::from_secs(2);
 
 fn logical_to_physical(value: usize, dpi: usize) -> usize {
     if value == 0 {
@@ -132,6 +139,13 @@ enum ExplorerKeyboardAction {
     Exit,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FilePreviewAction {
+    ScrollVertical(isize),
+    ScrollHorizontal(isize),
+    Exit,
+}
+
 fn explorer_keyboard_action(key: &KeyCode, modifiers: Modifiers) -> Option<ExplorerKeyboardAction> {
     match (key, modifiers.remove_positional_mods()) {
         (KeyCode::Char('w'), Modifiers::NONE) => Some(ExplorerKeyboardAction::Move(-1)),
@@ -156,6 +170,47 @@ fn explorer_keyboard_action(key: &KeyCode, modifiers: Modifiers) -> Option<Explo
         (KeyCode::Char('\r'), Modifiers::NONE) => Some(ExplorerKeyboardAction::Activate),
         (KeyCode::Char('\u{1b}'), Modifiers::NONE) => Some(ExplorerKeyboardAction::Exit),
         _ => None,
+    }
+}
+
+fn file_preview_action(key: &KeyCode, modifiers: Modifiers) -> Option<FilePreviewAction> {
+    match (key, modifiers.remove_positional_mods()) {
+        (KeyCode::Char('w'), Modifiers::NONE) | (KeyCode::UpArrow, Modifiers::NONE) => {
+            Some(FilePreviewAction::ScrollVertical(-1))
+        }
+        (KeyCode::Char('s'), Modifiers::NONE) | (KeyCode::DownArrow, Modifiers::NONE) => {
+            Some(FilePreviewAction::ScrollVertical(1))
+        }
+        // The macOS text-input path can normalize a physical Shift+letter to
+        // uppercase with no Shift bit. Accept both forms for the jump keys.
+        (KeyCode::Char('W'), Modifiers::NONE)
+        | (KeyCode::Char('w' | 'W'), Modifiers::SHIFT)
+        | (KeyCode::PageUp, Modifiers::NONE) => Some(FilePreviewAction::ScrollVertical(-5)),
+        (KeyCode::Char('S'), Modifiers::NONE)
+        | (KeyCode::Char('s' | 'S'), Modifiers::SHIFT)
+        | (KeyCode::PageDown, Modifiers::NONE) => Some(FilePreviewAction::ScrollVertical(5)),
+        (KeyCode::Char('a'), Modifiers::NONE) | (KeyCode::LeftArrow, Modifiers::NONE) => {
+            Some(FilePreviewAction::ScrollHorizontal(-1))
+        }
+        (KeyCode::Char('d'), Modifiers::NONE) | (KeyCode::RightArrow, Modifiers::NONE) => {
+            Some(FilePreviewAction::ScrollHorizontal(1))
+        }
+        (KeyCode::Char('A'), Modifiers::NONE) | (KeyCode::Char('a' | 'A'), Modifiers::SHIFT) => {
+            Some(FilePreviewAction::ScrollHorizontal(-8))
+        }
+        (KeyCode::Char('D'), Modifiers::NONE) | (KeyCode::Char('d' | 'D'), Modifiers::SHIFT) => {
+            Some(FilePreviewAction::ScrollHorizontal(8))
+        }
+        (KeyCode::Char('\u{1b}'), Modifiers::NONE) => Some(FilePreviewAction::Exit),
+        _ => None,
+    }
+}
+
+fn apply_preview_scroll(value: usize, delta: isize) -> usize {
+    if delta < 0 {
+        value.saturating_sub((-delta) as usize)
+    } else {
+        value.saturating_add(delta as usize)
     }
 }
 
@@ -339,6 +394,7 @@ struct FileWorkspaceUi {
     revision: Option<FileRevision>,
     cursor: usize,
     scroll: usize,
+    horizontal_scroll: usize,
     request_id: u64,
     pending_request: Option<u64>,
     error: Option<String>,
@@ -365,6 +421,7 @@ impl Default for FileWorkspaceUi {
             revision: None,
             cursor: 0,
             scroll: 0,
+            horizontal_scroll: 0,
             request_id: 0,
             pending_request: None,
             error: None,
@@ -411,6 +468,7 @@ impl FileWorkspaceUi {
         self.revision = None;
         self.cursor = 0;
         self.scroll = 0;
+        self.horizontal_scroll = 0;
         self.error = None;
     }
 
@@ -501,6 +559,8 @@ impl FileWorkspaceUi {
             "path": self.active_path,
             "content_bytes": self.content.len(),
             "document_lines": self.document_lines.len(),
+            "scroll": self.scroll,
+            "horizontal_scroll": self.horizontal_scroll,
             "dirty": self.dirty,
             "pending": self.pending_request,
             "error": self.error,
@@ -510,6 +570,91 @@ impl FileWorkspaceUi {
             let _ = std::fs::write(path, data);
         }
     }
+}
+
+#[derive(Clone)]
+struct CodexPromptCandidate {
+    prompt: CodexPromptMatch,
+    first_seen: Instant,
+}
+
+#[derive(Clone)]
+struct TmuxPromptScanRequest {
+    outer_pane_id: PaneId,
+    tty_name: String,
+    tmux_executable: String,
+}
+
+struct CodexPromptAutomationUi {
+    native_pending: HashMap<PaneId, Instant>,
+    native_candidates: HashMap<PaneId, CodexPromptCandidate>,
+    native_handled: HashMap<PaneId, CodexPromptMatch>,
+    recent_manual_input: HashMap<PaneId, Instant>,
+    tmux_scan_queue: VecDeque<TmuxPromptScanRequest>,
+    tmux_scan_in_flight: Option<TmuxPromptScanRequest>,
+    tmux_candidates: HashMap<String, CodexPromptCandidate>,
+    tmux_handled: HashMap<String, CodexPromptMatch>,
+    tmux_choices_pending: HashMap<String, CodexPromptMatch>,
+    last_tmux_scan: Instant,
+    choices_sent: usize,
+}
+
+impl Default for CodexPromptAutomationUi {
+    fn default() -> Self {
+        Self {
+            native_pending: HashMap::new(),
+            native_candidates: HashMap::new(),
+            native_handled: HashMap::new(),
+            recent_manual_input: HashMap::new(),
+            tmux_scan_queue: VecDeque::new(),
+            tmux_scan_in_flight: None,
+            tmux_candidates: HashMap::new(),
+            tmux_handled: HashMap::new(),
+            tmux_choices_pending: HashMap::new(),
+            last_tmux_scan: Instant::now()
+                .checked_sub(CODEX_PROMPT_TMUX_SCAN_INTERVAL)
+                .unwrap_or_else(Instant::now),
+            choices_sent: 0,
+        }
+    }
+}
+
+fn shared_codex_prompt_deduplication() -> &'static Mutex<HashMap<String, u64>> {
+    static DEDUPLICATION: OnceLock<Mutex<HashMap<String, u64>>> = OnceLock::new();
+    DEDUPLICATION.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn reserve_codex_prompt(target_id: &str, fingerprint: u64) -> bool {
+    let Ok(mut handled) = shared_codex_prompt_deduplication().lock() else {
+        return false;
+    };
+    match handled.get(target_id) {
+        Some(_) => false,
+        None => {
+            handled.insert(target_id.to_string(), fingerprint);
+            true
+        }
+    }
+}
+
+fn clear_codex_prompt_reservation(target_id: &str) {
+    if let Ok(mut handled) = shared_codex_prompt_deduplication().lock() {
+        handled.remove(target_id);
+    }
+}
+
+fn opaque_native_prompt_target(mux_window_id: usize, pane_id: PaneId) -> String {
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in mux_window_id
+        .to_le_bytes()
+        .iter()
+        .copied()
+        .chain(pane_id.to_le_bytes().iter().copied())
+    {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("{hash:016x}")
 }
 
 pub struct ExplorerUi {
@@ -542,6 +687,7 @@ pub struct ExplorerUi {
     tick_scheduled: bool,
     last_error: Option<String>,
     file_workspace: FileWorkspaceUi,
+    codex_prompt_automation: CodexPromptAutomationUi,
 }
 
 impl ExplorerUi {
@@ -575,10 +721,14 @@ impl ExplorerUi {
         let codex_home = std::env::var_os("CODEX_HOME")
             .map(PathBuf::from)
             .unwrap_or_else(|| config::HOME_DIR.join(".codex"));
+        let service = WorkspaceService::new();
+        service.set_codex_prompt_actions_enabled(
+            state.codex_prompt_automation_mode == CodexPromptAutomationMode::Active,
+        );
         Self {
             state,
             state_path,
-            service: WorkspaceService::new(),
+            service,
             cache: DirectoryCache::default(),
             pending_directories: HashSet::new(),
             watched_directories: HashSet::new(),
@@ -611,6 +761,7 @@ impl ExplorerUi {
             tick_scheduled: false,
             last_error,
             file_workspace: FileWorkspaceUi::default(),
+            codex_prompt_automation: CodexPromptAutomationUi::default(),
         }
     }
 
@@ -1266,13 +1417,30 @@ impl TermWindow {
             Some(window) => window.clone(),
             None => return,
         };
-        let interval = if self.explorer.context_request_in_flight
+        let service_busy = self.explorer.context_request_in_flight
             || self.explorer.git_status_request_in_flight
             || self.explorer.workspace_status_request_in_flight
             || self.explorer.file_workspace.pending_request.is_some()
             || !self.explorer.pending_directories.is_empty()
-        {
+            || self
+                .explorer
+                .codex_prompt_automation
+                .tmux_scan_in_flight
+                .is_some()
+            || !self
+                .explorer
+                .codex_prompt_automation
+                .tmux_scan_queue
+                .is_empty();
+        let interval = if service_busy {
             SERVICE_POLL_INTERVAL
+        } else if !self
+            .explorer
+            .codex_prompt_automation
+            .native_pending
+            .is_empty()
+        {
+            CODEX_PROMPT_DEBOUNCE
         } else {
             SERVICE_IDLE_POLL_INTERVAL
         };
@@ -1310,6 +1478,12 @@ impl TermWindow {
                     } else {
                         self.explorer.context_request_in_flight = false;
                     }
+                }
+                ServiceResponse::TmuxCodexPromptScanCompleted(scan) => {
+                    changed |= self.apply_tmux_codex_prompt_scan(scan, Instant::now());
+                }
+                ServiceResponse::TmuxCodexPromptChoiceCompleted(result) => {
+                    changed |= self.apply_tmux_codex_prompt_choice_result(result);
                 }
                 ServiceResponse::GitStatusLoaded(snapshot) => {
                     self.explorer.git_status_request_in_flight = false;
@@ -1354,6 +1528,7 @@ impl TermWindow {
                             self.explorer.file_workspace.revision = result.revision;
                             self.explorer.file_workspace.cursor = 0;
                             self.explorer.file_workspace.scroll = 0;
+                            self.explorer.file_workspace.horizontal_scroll = 0;
                             self.explorer.file_workspace.dirty = false;
                             self.explorer.file_workspace.rebuild_document();
                         }
@@ -1410,6 +1585,7 @@ impl TermWindow {
             self.explorer.last_workspace_status_refresh = now;
             self.explorer.request_workspace_status();
         }
+        changed |= self.codex_prompt_automation_tick(now);
         self.schedule_explorer_tick();
         changed
     }
@@ -1445,6 +1621,536 @@ impl TermWindow {
         self.explorer.context_request_in_flight = true;
         self.explorer.last_context_request = Instant::now();
         self.explorer.service.resolve_context(request);
+    }
+
+    fn audit_codex_prompt(
+        &self,
+        target_id: String,
+        prompt: &CodexPromptMatch,
+        result: &'static str,
+    ) {
+        let event = CodexPromptAuditEvent::new(
+            self.explorer.state.codex_prompt_automation_mode,
+            prompt.kind,
+            target_id,
+            prompt.action,
+            result,
+        );
+        self.explorer.service.audit_codex_prompt(
+            config::DATA_DIR.join("codex-prompt-automation.jsonl"),
+            event,
+        );
+    }
+
+    fn pane_belongs_to_this_window(&self, pane_id: PaneId) -> bool {
+        let mux = Mux::get();
+        mux.get_window(self.mux_window_id)
+            .map(|window| window.iter().any(|tab| tab.contains_pane(pane_id)))
+            .unwrap_or(false)
+    }
+
+    pub fn codex_prompt_pane_output(&mut self, pane_id: PaneId) {
+        if self.explorer.state.codex_prompt_automation_mode == CodexPromptAutomationMode::Off {
+            return;
+        }
+        self.explorer
+            .codex_prompt_automation
+            .native_pending
+            .insert(pane_id, Instant::now());
+        self.schedule_explorer_tick();
+    }
+
+    fn queue_tmux_codex_prompt_scan(&mut self, request: TmuxPromptScanRequest) {
+        let automation = &mut self.explorer.codex_prompt_automation;
+        if automation
+            .tmux_scan_in_flight
+            .as_ref()
+            .map(|current| current.tty_name == request.tty_name)
+            .unwrap_or(false)
+            || automation
+                .tmux_scan_queue
+                .iter()
+                .any(|queued| queued.tty_name == request.tty_name)
+        {
+            return;
+        }
+        automation.tmux_scan_queue.push_back(request);
+    }
+
+    pub fn note_codex_prompt_manual_input(&mut self, pane_id: PaneId) {
+        self.explorer
+            .codex_prompt_automation
+            .recent_manual_input
+            .insert(pane_id, Instant::now());
+    }
+
+    pub fn codex_prompt_automation_key_down(
+        &mut self,
+        key: &KeyCode,
+        modifiers: Modifiers,
+    ) -> bool {
+        let modifiers = modifiers.remove_positional_mods();
+        if modifiers != (Modifiers::SUPER | Modifiers::ALT) {
+            return false;
+        }
+        let next_mode = match key {
+            KeyCode::Char('\u{1b}') => Some(CodexPromptAutomationMode::Off),
+            KeyCode::Char('p' | 'P') => {
+                Some(match self.explorer.state.codex_prompt_automation_mode {
+                    CodexPromptAutomationMode::Off => CodexPromptAutomationMode::Observe,
+                    CodexPromptAutomationMode::Observe => CodexPromptAutomationMode::Active,
+                    CodexPromptAutomationMode::Active => CodexPromptAutomationMode::Off,
+                })
+            }
+            _ => None,
+        };
+        let Some(next_mode) = next_mode else {
+            return false;
+        };
+        if next_mode == CodexPromptAutomationMode::Off {
+            let native_targets = self
+                .explorer
+                .codex_prompt_automation
+                .native_handled
+                .keys()
+                .map(|pane_id| opaque_native_prompt_target(self.mux_window_id, *pane_id))
+                .collect::<Vec<_>>();
+            let tmux_targets = self
+                .explorer
+                .codex_prompt_automation
+                .tmux_handled
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>();
+            for target in native_targets.into_iter().chain(tmux_targets) {
+                clear_codex_prompt_reservation(&target);
+            }
+            self.explorer.codex_prompt_automation.native_pending.clear();
+            self.explorer
+                .codex_prompt_automation
+                .native_candidates
+                .clear();
+            self.explorer.codex_prompt_automation.native_handled.clear();
+            self.explorer
+                .codex_prompt_automation
+                .tmux_scan_queue
+                .clear();
+            self.explorer
+                .codex_prompt_automation
+                .tmux_candidates
+                .clear();
+            self.explorer.codex_prompt_automation.tmux_handled.clear();
+            self.explorer
+                .codex_prompt_automation
+                .tmux_choices_pending
+                .clear();
+        }
+        self.explorer.state.codex_prompt_automation_mode = next_mode;
+        self.explorer
+            .service
+            .set_codex_prompt_actions_enabled(next_mode == CodexPromptAutomationMode::Active);
+        self.explorer.persist();
+        true
+    }
+
+    fn native_codex_prompt_surface_is_available(&mut self, pane_id: PaneId) -> bool {
+        if self.pane_state(pane_id).overlay.is_some() {
+            return false;
+        }
+        let is_active = self
+            .get_active_pane_no_overlay()
+            .map(|pane| pane.pane_id() == pane_id)
+            .unwrap_or(false);
+        !is_active
+            || (!self.explorer.focused
+                && self.explorer.file_workspace.mode == FileWorkspaceMode::Terminal)
+    }
+
+    fn clear_native_codex_prompt(&mut self, pane_id: PaneId) {
+        self.explorer
+            .codex_prompt_automation
+            .native_candidates
+            .remove(&pane_id);
+        if let Some(previous) = self
+            .explorer
+            .codex_prompt_automation
+            .native_handled
+            .remove(&pane_id)
+        {
+            let target_id = opaque_native_prompt_target(self.mux_window_id, pane_id);
+            clear_codex_prompt_reservation(&target_id);
+            self.audit_codex_prompt(target_id, &previous, "cleared");
+        }
+    }
+
+    fn process_native_codex_prompt(&mut self, pane_id: PaneId, now: Instant) -> bool {
+        if !self.pane_belongs_to_this_window(pane_id) {
+            self.clear_native_codex_prompt(pane_id);
+            return false;
+        }
+        if self
+            .explorer
+            .codex_prompt_automation
+            .recent_manual_input
+            .get(&pane_id)
+            .map(|input| now.duration_since(*input) < CODEX_PROMPT_MANUAL_INPUT_PAUSE)
+            .unwrap_or(false)
+        {
+            self.explorer
+                .codex_prompt_automation
+                .native_pending
+                .insert(pane_id, now);
+            return false;
+        }
+        if !self.native_codex_prompt_surface_is_available(pane_id) {
+            self.explorer
+                .codex_prompt_automation
+                .native_candidates
+                .remove(&pane_id);
+            return false;
+        }
+        let mux = Mux::get();
+        let Some(pane) = mux.get_pane(pane_id) else {
+            self.clear_native_codex_prompt(pane_id);
+            return false;
+        };
+        let process = pane.get_foreground_process_name(CachePolicy::AllowStale);
+        if process_is_tmux(process.as_deref()) {
+            if let Some(tty_name) = pane.tty_name() {
+                self.queue_tmux_codex_prompt_scan(TmuxPromptScanRequest {
+                    outer_pane_id: pane_id,
+                    tty_name,
+                    tmux_executable: process.unwrap_or_else(|| "tmux".to_string()),
+                });
+            }
+            self.clear_native_codex_prompt(pane_id);
+            return false;
+        }
+        if !process_is_codex(process.as_deref()) {
+            self.clear_native_codex_prompt(pane_id);
+            return false;
+        }
+        let dimensions = pane.get_dimensions();
+        let bottom = dimensions
+            .physical_top
+            .saturating_add(dimensions.viewport_rows as isize);
+        let (_, lines) = pane.get_lines(dimensions.physical_top..bottom);
+        let rows = lines
+            .iter()
+            .map(|line| line.as_str().into_owned())
+            .collect::<Vec<_>>();
+        let Some(prompt) = classify_codex_prompt(&rows) else {
+            self.clear_native_codex_prompt(pane_id);
+            return false;
+        };
+        if self
+            .explorer
+            .codex_prompt_automation
+            .native_handled
+            .contains_key(&pane_id)
+        {
+            return false;
+        }
+        let candidate = self
+            .explorer
+            .codex_prompt_automation
+            .native_candidates
+            .get(&pane_id);
+        let stable = candidate
+            .filter(|candidate| candidate.prompt == prompt)
+            .map(|candidate| now.duration_since(candidate.first_seen) >= CODEX_PROMPT_DEBOUNCE)
+            .unwrap_or(false);
+        if !stable {
+            let keep_first_seen = candidate
+                .filter(|candidate| candidate.prompt == prompt)
+                .map(|candidate| candidate.first_seen);
+            self.explorer
+                .codex_prompt_automation
+                .native_candidates
+                .insert(
+                    pane_id,
+                    CodexPromptCandidate {
+                        prompt,
+                        first_seen: keep_first_seen.unwrap_or(now),
+                    },
+                );
+            self.explorer
+                .codex_prompt_automation
+                .native_pending
+                .insert(pane_id, now);
+            return false;
+        }
+        let target_id = opaque_native_prompt_target(self.mux_window_id, pane_id);
+        if !reserve_codex_prompt(&target_id, prompt.fingerprint) {
+            self.explorer
+                .codex_prompt_automation
+                .native_handled
+                .insert(pane_id, prompt);
+            return false;
+        }
+        let mode = self.explorer.state.codex_prompt_automation_mode;
+        match mode {
+            CodexPromptAutomationMode::Off => {}
+            CodexPromptAutomationMode::Observe => {
+                self.audit_codex_prompt(target_id, &prompt, "observed");
+            }
+            CodexPromptAutomationMode::Active => {
+                let result =
+                    pane.key_down(PaneKeyCode::Char(prompt.shortcut), PaneKeyModifiers::NONE);
+                if result.is_ok() {
+                    self.explorer.codex_prompt_automation.choices_sent += 1;
+                    self.audit_codex_prompt(target_id, &prompt, "sent");
+                } else {
+                    self.audit_codex_prompt(target_id, &prompt, "failed_closed");
+                }
+            }
+        }
+        self.explorer
+            .codex_prompt_automation
+            .native_handled
+            .insert(pane_id, prompt);
+        true
+    }
+
+    fn apply_tmux_codex_prompt_scan(&mut self, scan: TmuxCodexPromptScan, now: Instant) -> bool {
+        let Some(request) = self
+            .explorer
+            .codex_prompt_automation
+            .tmux_scan_in_flight
+            .take()
+        else {
+            return false;
+        };
+        self.explorer.codex_prompt_automation.last_tmux_scan = now;
+        if self.explorer.state.codex_prompt_automation_mode == CodexPromptAutomationMode::Off {
+            return false;
+        }
+        if self
+            .explorer
+            .codex_prompt_automation
+            .recent_manual_input
+            .get(&request.outer_pane_id)
+            .map(|input| now.duration_since(*input) < CODEX_PROMPT_MANUAL_INPUT_PAUSE)
+            .unwrap_or(false)
+        {
+            return false;
+        }
+        if let Some(error) = scan.error {
+            log::debug!("Cosmos Codex prompt tmux scan failed closed: {error}");
+            return false;
+        }
+        let scanned_targets = scan
+            .panes
+            .iter()
+            .map(|pane| pane.target_id.clone())
+            .collect::<HashSet<_>>();
+        let stale_targets = self
+            .explorer
+            .codex_prompt_automation
+            .tmux_handled
+            .keys()
+            .filter(|target| !scanned_targets.contains(*target))
+            .cloned()
+            .collect::<Vec<_>>();
+        for target in stale_targets {
+            if let Some(previous) = self
+                .explorer
+                .codex_prompt_automation
+                .tmux_handled
+                .remove(&target)
+            {
+                clear_codex_prompt_reservation(&target);
+                self.audit_codex_prompt(target.clone(), &previous, "cleared");
+            }
+            self.explorer
+                .codex_prompt_automation
+                .tmux_candidates
+                .remove(&target);
+        }
+        self.explorer
+            .codex_prompt_automation
+            .tmux_candidates
+            .retain(|target, _| scanned_targets.contains(target));
+
+        let mut needs_rescan = false;
+        let mut changed = false;
+        for pane in scan.panes {
+            let target_id = pane.target_id.clone();
+            let Some(prompt) = pane.prompt.clone() else {
+                self.explorer
+                    .codex_prompt_automation
+                    .tmux_candidates
+                    .remove(&target_id);
+                if let Some(previous) = self
+                    .explorer
+                    .codex_prompt_automation
+                    .tmux_handled
+                    .remove(&target_id)
+                {
+                    clear_codex_prompt_reservation(&target_id);
+                    self.audit_codex_prompt(target_id, &previous, "cleared");
+                    changed = true;
+                }
+                continue;
+            };
+            if self
+                .explorer
+                .codex_prompt_automation
+                .tmux_handled
+                .contains_key(&target_id)
+            {
+                continue;
+            }
+            let candidate = self
+                .explorer
+                .codex_prompt_automation
+                .tmux_candidates
+                .get(&target_id);
+            let stable = candidate
+                .filter(|candidate| candidate.prompt == prompt)
+                .map(|candidate| now.duration_since(candidate.first_seen) >= CODEX_PROMPT_DEBOUNCE)
+                .unwrap_or(false);
+            if !stable {
+                let keep_first_seen = candidate
+                    .filter(|candidate| candidate.prompt == prompt)
+                    .map(|candidate| candidate.first_seen);
+                self.explorer
+                    .codex_prompt_automation
+                    .tmux_candidates
+                    .insert(
+                        target_id,
+                        CodexPromptCandidate {
+                            prompt,
+                            first_seen: keep_first_seen.unwrap_or(now),
+                        },
+                    );
+                needs_rescan = true;
+                continue;
+            }
+            if !reserve_codex_prompt(&target_id, prompt.fingerprint) {
+                self.explorer
+                    .codex_prompt_automation
+                    .tmux_handled
+                    .insert(target_id, prompt);
+                continue;
+            }
+            match self.explorer.state.codex_prompt_automation_mode {
+                CodexPromptAutomationMode::Off => {}
+                CodexPromptAutomationMode::Observe => {
+                    self.audit_codex_prompt(target_id.clone(), &prompt, "observed");
+                }
+                CodexPromptAutomationMode::Active => {
+                    self.explorer
+                        .codex_prompt_automation
+                        .tmux_choices_pending
+                        .insert(target_id.clone(), prompt.clone());
+                    self.explorer
+                        .service
+                        .choose_tmux_codex_prompt(pane, prompt.clone());
+                }
+            }
+            self.explorer
+                .codex_prompt_automation
+                .tmux_handled
+                .insert(target_id, prompt);
+            changed = true;
+        }
+        if needs_rescan {
+            self.queue_tmux_codex_prompt_scan(request);
+        }
+        changed
+    }
+
+    fn apply_tmux_codex_prompt_choice_result(
+        &mut self,
+        result: TmuxCodexPromptChoiceResult,
+    ) -> bool {
+        let Some(prompt) = self
+            .explorer
+            .codex_prompt_automation
+            .tmux_choices_pending
+            .remove(&result.target_id)
+        else {
+            return false;
+        };
+        if result.error.is_none() && result.fingerprint == prompt.fingerprint {
+            self.explorer.codex_prompt_automation.choices_sent += 1;
+            self.audit_codex_prompt(result.target_id, &prompt, "sent");
+        } else {
+            self.audit_codex_prompt(result.target_id, &prompt, "failed_closed");
+        }
+        true
+    }
+
+    fn codex_prompt_automation_tick(&mut self, now: Instant) -> bool {
+        if self.explorer.state.codex_prompt_automation_mode == CodexPromptAutomationMode::Off {
+            return false;
+        }
+        self.explorer
+            .codex_prompt_automation
+            .recent_manual_input
+            .retain(|_, input| now.duration_since(*input) < Duration::from_secs(30));
+        let due_native = self
+            .explorer
+            .codex_prompt_automation
+            .native_pending
+            .iter()
+            .filter_map(|(pane_id, output)| {
+                (now.duration_since(*output) >= CODEX_PROMPT_DEBOUNCE).then_some(*pane_id)
+            })
+            .collect::<Vec<_>>();
+        let mut changed = false;
+        for pane_id in due_native {
+            self.explorer
+                .codex_prompt_automation
+                .native_pending
+                .remove(&pane_id);
+            changed |= self.process_native_codex_prompt(pane_id, now);
+        }
+
+        if self
+            .explorer
+            .codex_prompt_automation
+            .tmux_scan_in_flight
+            .is_none()
+        {
+            if self
+                .explorer
+                .codex_prompt_automation
+                .tmux_scan_queue
+                .is_empty()
+                && now.duration_since(self.explorer.codex_prompt_automation.last_tmux_scan)
+                    >= CODEX_PROMPT_TMUX_SCAN_INTERVAL
+            {
+                if let Some(pane) = self.get_active_pane_no_overlay() {
+                    let process = pane.get_foreground_process_name(CachePolicy::AllowStale);
+                    if process_is_tmux(process.as_deref()) {
+                        if let Some(tty_name) = pane.tty_name() {
+                            self.queue_tmux_codex_prompt_scan(TmuxPromptScanRequest {
+                                outer_pane_id: pane.pane_id(),
+                                tty_name,
+                                tmux_executable: process.unwrap_or_else(|| "tmux".to_string()),
+                            });
+                        }
+                    } else {
+                        self.explorer.codex_prompt_automation.last_tmux_scan = now;
+                    }
+                }
+            }
+            if let Some(request) = self
+                .explorer
+                .codex_prompt_automation
+                .tmux_scan_queue
+                .pop_front()
+            {
+                self.explorer.service.scan_tmux_codex_prompts(
+                    request.tty_name.clone(),
+                    request.tmux_executable.clone(),
+                );
+                self.explorer.codex_prompt_automation.tmux_scan_in_flight = Some(request);
+            }
+        }
+        changed
     }
 
     pub fn reveal_active_in_explorer(&mut self) {
@@ -1903,6 +2609,11 @@ impl TermWindow {
             Some(root) => root,
             None => return,
         };
+        // Opening a file transfers keyboard ownership from the Explorer to
+        // the preview. The user can always return to the tree with prefix+0;
+        // leaving the Explorer mode active here would make W/S navigate the
+        // hidden tree instead of scrolling the newly opened document.
+        self.blur_explorer();
         if let Some(context) = self.explorer.active_context.as_ref() {
             self.explorer.file_workspace.owner_pane_id = Some(context.pane_id);
             self.explorer.file_workspace.owner_tmux_pane_id = context.tmux_pane_id.clone();
@@ -1925,6 +2636,7 @@ impl TermWindow {
         self.explorer.file_workspace.wrap_columns = 0;
         self.explorer.file_workspace.cursor = 0;
         self.explorer.file_workspace.scroll = 0;
+        self.explorer.file_workspace.horizontal_scroll = 0;
         self.explorer.file_workspace.dirty = false;
         self.explorer.file_workspace.revision = None;
         self.explorer.file_workspace.error = None;
@@ -2132,36 +2844,25 @@ impl TermWindow {
             return false;
         }
 
-        // Preview is only a visual surface for an inner tmux pane. Keep the
-        // terminal input path intact so tmux key tables, prompts, modes,
-        // repeat bindings, and no-prefix bindings continue to work exactly as
-        // they do while the terminal is painted.
-        if self.tmux_file_workspace_preview_active() {
-            return false;
-        }
-
         match self.explorer.file_workspace.mode {
             FileWorkspaceMode::View => {
-                match (key, modifiers) {
-                    (KeyCode::UpArrow, Modifiers::NONE) => {
+                match file_preview_action(key, modifiers) {
+                    Some(FilePreviewAction::ScrollVertical(delta)) => {
                         self.explorer.file_workspace.scroll =
-                            self.explorer.file_workspace.scroll.saturating_sub(1);
+                            apply_preview_scroll(self.explorer.file_workspace.scroll, delta);
                     }
-                    (KeyCode::DownArrow, Modifiers::NONE) => {
-                        self.explorer.file_workspace.scroll += 1;
+                    Some(FilePreviewAction::ScrollHorizontal(delta)) => {
+                        self.explorer.file_workspace.horizontal_scroll = apply_preview_scroll(
+                            self.explorer.file_workspace.horizontal_scroll,
+                            delta,
+                        );
                     }
-                    (KeyCode::PageUp, Modifiers::NONE) => {
-                        self.explorer.file_workspace.scroll =
-                            self.explorer.file_workspace.scroll.saturating_sub(12);
-                    }
-                    (KeyCode::PageDown, Modifiers::NONE) => {
-                        self.explorer.file_workspace.scroll += 12;
-                    }
-                    (KeyCode::Char('\u{1b}'), Modifiers::NONE) => {
-                        self.return_to_terminal_workspace();
-                    }
-                    _ => {}
+                    Some(FilePreviewAction::Exit) => self.return_to_terminal_workspace(),
+                    None => return false,
                 }
+                self.explorer
+                    .file_workspace
+                    .trace_test_state("file_preview_scrolled");
                 true
             }
             FileWorkspaceMode::Edit => {
@@ -2960,6 +3661,18 @@ impl TermWindow {
                 .scroll
                 .min(lines.len().saturating_sub(capacity.max(1)));
             self.explorer.file_workspace.scroll = scroll;
+            let max_horizontal_scroll = lines
+                .iter()
+                .map(|line| line.text.chars().count())
+                .max()
+                .unwrap_or(0)
+                .saturating_sub(1);
+            let horizontal_scroll = self
+                .explorer
+                .file_workspace
+                .horizontal_scroll
+                .min(max_horizontal_scroll);
+            self.explorer.file_workspace.horizontal_scroll = horizontal_scroll;
             for (screen_line, line) in lines.into_iter().skip(scroll).take(capacity).enumerate() {
                 let y = body_top + screen_line * row_height;
                 let (foreground, bold, font_size, monospace, indent) = match line.kind {
@@ -2993,14 +3706,19 @@ impl TermWindow {
                         FILE_CODE_BG.to_linear_tuple_rgba(),
                     )?;
                 }
+                let display_text = if horizontal_scroll == 0 {
+                    line.text.clone()
+                } else {
+                    line.text.chars().skip(horizontal_scroll).collect()
+                };
                 self.render_file_line(
                     layers,
-                    &line.text,
+                    &display_text,
                     y as f32,
                     (body_left + indent) as f32,
                     body_right.saturating_sub(body_left + indent) as f32,
                     row_height as f32,
-                    if line.text.contains("‹http") {
+                    if display_text.contains("‹http") {
                         FILE_LINK
                     } else {
                         foreground
@@ -3431,6 +4149,40 @@ impl TermWindow {
             }
         }
 
+        let prompt_mode = self.explorer.state.codex_prompt_automation_mode;
+        let prompt_label = if self.explorer.codex_prompt_automation.choices_sent == 0 {
+            format!("Prompts {}", prompt_mode.label())
+        } else {
+            format!(
+                "Prompts {} · {}",
+                prompt_mode.label(),
+                self.explorer.codex_prompt_automation.choices_sent
+            )
+        };
+        let prompt_left = capacity_right + scale(12);
+        let prompt_logical_width =
+            (UnicodeWidthStr::width(prompt_label.as_str()) * 7 + 12).clamp(96, 160);
+        let prompt_width = scale(prompt_logical_width).min(width.saturating_sub(prompt_left));
+        if prompt_width > 0 && prompt_left < width {
+            self.render_explorer_line(
+                layers,
+                &prompt_label,
+                top as f32,
+                prompt_left as f32,
+                prompt_width as f32,
+                height as f32,
+                if prompt_mode == CodexPromptAutomationMode::Active {
+                    STATUS_BAR_LIVE
+                } else {
+                    MUTED
+                },
+                STATUS_BAR_BG,
+                false,
+                STATUS_BAR_FONT_LOGICAL_SIZE,
+            )?;
+            capacity_right = prompt_left + prompt_width;
+        }
+
         if let Some(reset) = self
             .explorer
             .workspace_status
@@ -3713,8 +4465,9 @@ fn explorer_prompt_overlay(
 #[cfg(test)]
 mod tests {
     use super::{
-        explorer_keyboard_action, is_tmux_explorer_toggle_key, tmux_key_matches_event,
-        ExplorerKeyboardAction,
+        apply_preview_scroll, explorer_keyboard_action, file_preview_action,
+        is_tmux_explorer_toggle_key, tmux_key_matches_event, ExplorerKeyboardAction,
+        FilePreviewAction,
     };
     use ::window::{KeyCode, Modifiers};
 
@@ -3778,5 +4531,31 @@ mod tests {
             explorer_keyboard_action(&KeyCode::Char('x'), Modifiers::NONE),
             None
         );
+    }
+
+    #[test]
+    fn file_preview_navigation_supports_vertical_and_horizontal_jumps() {
+        assert_eq!(
+            file_preview_action(&KeyCode::Char('w'), Modifiers::NONE),
+            Some(FilePreviewAction::ScrollVertical(-1))
+        );
+        assert_eq!(
+            file_preview_action(&KeyCode::Char('S'), Modifiers::NONE),
+            Some(FilePreviewAction::ScrollVertical(5))
+        );
+        assert_eq!(
+            file_preview_action(&KeyCode::Char('a'), Modifiers::NONE),
+            Some(FilePreviewAction::ScrollHorizontal(-1))
+        );
+        assert_eq!(
+            file_preview_action(&KeyCode::Char('D'), Modifiers::SHIFT),
+            Some(FilePreviewAction::ScrollHorizontal(8))
+        );
+        assert_eq!(
+            file_preview_action(&KeyCode::Char('x'), Modifiers::NONE),
+            None
+        );
+        assert_eq!(apply_preview_scroll(3, -5), 0);
+        assert_eq!(apply_preview_scroll(3, 8), 11);
     }
 }

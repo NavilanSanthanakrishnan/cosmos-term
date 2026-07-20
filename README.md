@@ -10,7 +10,6 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/NavilanSanthanakrishnan/cosmos-term/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/NavilanSanthanakrishnan/cosmos-term/actions/workflows/ci.yml/badge.svg"></a>
   <a href="LICENSE.md"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-6f42c1"></a>
   <img alt="macOS Apple silicon" src="https://img.shields.io/badge/platform-macOS%20Apple%20silicon-111827">
   <img alt="Rust" src="https://img.shields.io/badge/built%20with-Rust-b7410e">
@@ -43,6 +42,7 @@ window while preserving the terminal as the primary workspace.
 | Native file workspace | Pane-aware toggle, formatted Markdown, text editing, safe saves |
 | Native terminal core | WezTerm rendering, tabs, splits, config, and mux |
 | Local status | Codex usage, loop count, CPU, and RAM without a daemon |
+| Preferred Codex prompts | Fail-closed observe/active handling without focus changes |
 | Process isolation | Separate app identity, config, state, sockets, and protocol |
 
 The Explorer is intentionally always visible. `Command+Shift+E` is consumed so
@@ -149,6 +149,10 @@ non-Cosmos keyboard input to that pane.
 | `W` / `S` | Move one Explorer row while keyboard navigation is active |
 | `Shift+W` / `Shift+S` | Move five Explorer rows |
 | `Return` | Open the selected file or toggle its directory |
+| `W` / `S` in preview | Scroll the open file one line up/down |
+| `Shift+W` / `Shift+S` in preview | Scroll the open file five lines |
+| `A` / `D` in preview | Scroll the open file one column left/right |
+| `Shift+A` / `Shift+D` in preview | Scroll the open file eight columns |
 | `Escape` | Leave edit mode; from native preview, return to terminal |
 | `Command+Shift+D` | Discard edits and reload the file from disk |
 
@@ -168,6 +172,27 @@ and are sampled as a stable ten-second rolling view: Cosmos does not launch a
 daemon, helper, `top`, `ps`, `pgrep`, or Codex CLI process, and it creates no
 additional status thread. On systems without Codex data, the Codex portion
 remains unobtrusively unavailable while machine capacity continues to update.
+
+## Preferred Codex prompts
+
+Cosmos can recognize three exact Codex selection prompts and preserve the
+current session preference: keep waiting during additional safety checks, keep
+the current model near rate limits, and use the existing model after an
+upgrade. It starts in `observe` mode, which records only that a recognized
+choice would have been made.
+
+`Command+Option+P` cycles `off` → `observe` → `active` → `off`.
+`Command+Option+Escape` turns the feature off immediately. The footer always
+shows the current mode and successful-choice count.
+
+Active mode sends one displayed numeric shortcut only after a complete prompt
+signature is stable. Native panes must have an exact `codex` foreground
+executable. Tmux panes are discovered and revalidated by exact pane target on
+a worker without selecting a pane, changing a window, or bringing Cosmos to
+the foreground. Approvals, permissions, destructive confirmations, arbitrary
+menus, ambiguous prompts, copy mode, and recent manual input all fail closed.
+Audit records contain only time, prompt kind, opaque target, policy action,
+and result—never terminal text, commands, paths, or conversation content.
 
 ## Close behavior
 

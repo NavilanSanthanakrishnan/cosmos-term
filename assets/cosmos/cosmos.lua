@@ -36,6 +36,10 @@ local protected_close_enabled = file_exists(close_lock_path)
 -- and wide-gamut macOS displays; the legacy OpenGL path applies the display
 -- profile a second time and visibly lifts VS Code's #252526 sidebar color.
 config.front_end = 'WebGpu'
+-- Interactive AI sessions can repaint the full terminal continuously while
+-- resuming or streaming. A 30 FPS ceiling keeps input responsive and cuts
+-- renderer contention without adding a poller, helper, or background task.
+config.max_fps = 30
 config.font_size = 14.0
 config.line_height = 1.08
 config.initial_cols = 100

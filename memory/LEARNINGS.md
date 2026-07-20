@@ -201,3 +201,14 @@
   reflowed by tmux when the original pane narrows; if those three widths and
   the painted divider agree, changing Cosmos's pixel offsets would introduce
   a real terminal mismatch rather than fix the historical text.
+- Treat terminal-output notifications as invalidation signals, not permission
+  to perform process discovery or parsing synchronously. Record a pane
+  timestamp, wait for a short quiet period, then inspect bounded visible state.
+  This prevents rapid streaming output such as GLX resume from turning
+  background status work into input lag.
+- Prompt automation must classify complete versioned menus and revalidate at
+  the final action boundary. Exact executable identity, option set, target
+  label, shortcut, pane mode, fingerprint, recent-input pause, shared
+  deduplication, and a separately closable worker action gate are all needed
+  to fail closed. Persist observe as the default, and never log terminal
+  content for convenience.

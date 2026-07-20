@@ -9,7 +9,9 @@ use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const CURRENT_LAYOUT_VERSION: u8 = 4;
@@ -24,6 +26,7 @@ const CODEX_ROLLOUT_INITIAL_TAIL_BYTES: u64 = 512 * 1024;
 const CODEX_ROLLOUT_MAX_TAIL_BYTES: u64 = 8 * 1024 * 1024;
 const CODEX_ROLLOUT_DISCOVERY_INTERVAL: Duration = Duration::from_secs(15);
 const CODEX_ROLLOUT_CANDIDATE_LIMIT: usize = 16;
+pub const CODEX_PROMPT_REGISTRY_VERSION: &str = "codex-0.144.6";
 #[cfg(target_os = "macos")]
 const SYSTEM_CAPACITY_REFRESH_INTERVAL: Duration = Duration::from_secs(10);
 
@@ -80,6 +83,287 @@ fn default_true() -> bool {
 
 fn default_width() -> usize {
     DEFAULT_SIDEBAR_WIDTH
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CodexPromptAutomationMode {
+    Off,
+    Observe,
+    Active,
+}
+
+impl Default for CodexPromptAutomationMode {
+    fn default() -> Self {
+        Self::Observe
+    }
+}
+
+impl CodexPromptAutomationMode {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "off" => Some(Self::Off),
+            "observe" => Some(Self::Observe),
+            "active" => Some(Self::Active),
+            _ => None,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Observe => "observe",
+            Self::Active => "active",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CodexPromptKind {
+    AdditionalSafetyChecks,
+    ApproachingRateLimits,
+    ModelUpgrade,
+}
+
+impl CodexPromptKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::AdditionalSafetyChecks => "additional_safety_checks",
+            Self::ApproachingRateLimits => "approaching_rate_limits",
+            Self::ModelUpgrade => "model_upgrade",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CodexPromptPolicyAction {
+    KeepWaiting,
+    KeepCurrentModel,
+    UseExistingModel,
+}
+
+impl CodexPromptPolicyAction {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::KeepWaiting => "keep_waiting",
+            Self::KeepCurrentModel => "keep_current_model",
+            Self::UseExistingModel => "use_existing_model",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodexPromptMatch {
+    pub kind: CodexPromptKind,
+    pub action: CodexPromptPolicyAction,
+    pub shortcut: char,
+    pub fingerprint: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PromptOption {
+    shortcut: char,
+    label: String,
+    selected: bool,
+}
+
+fn normalize_prompt_row(row: &str) -> String {
+    row.replace('\u{a0}', " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn parse_prompt_option(row: &str) -> Option<PromptOption> {
+    let row = row.trim_start();
+    let (selected, row) = if let Some(rest) = row.strip_prefix('›') {
+        (true, rest.trim_start())
+    } else {
+        (false, row)
+    };
+    let mut chars = row.chars();
+    let shortcut = chars.next().filter(|value| value.is_ascii_digit())?;
+    if shortcut == '0' || chars.next()? != '.' {
+        return None;
+    }
+    let label = chars.as_str().trim();
+    if label.is_empty() {
+        return None;
+    }
+    Some(PromptOption {
+        shortcut,
+        label: normalize_prompt_row(label),
+        selected,
+    })
+}
+
+fn prompt_fingerprint(
+    kind: CodexPromptKind,
+    action: CodexPromptPolicyAction,
+    options: &[PromptOption],
+) -> u64 {
+    // Stable FNV-1a keeps the audit identifier opaque without pulling prompt
+    // contents, paths, or conversation data into logs.
+    let mut hash = 0xcbf29ce484222325u64;
+    let mut push = |bytes: &[u8]| {
+        for byte in bytes {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+    };
+    push(kind.label().as_bytes());
+    push(action.label().as_bytes());
+    for option in options {
+        push(&[option.shortcut as u8]);
+        push(option.label.as_bytes());
+    }
+    hash
+}
+
+fn prompt_region(rows: &[String], heading: &str) -> Option<Vec<String>> {
+    let normalized = rows
+        .iter()
+        .map(|row| normalize_prompt_row(row))
+        .collect::<Vec<_>>();
+    let heading_index = normalized.iter().rposition(|row| row.contains(heading))?;
+    let region = normalized[heading_index..].to_vec();
+    // Prompt surfaces always include a selected numbered row and a
+    // confirmation hint. Requiring both prevents matching quoted prose or an
+    // old prompt title that remains in visible scrollback.
+    let has_selected_option = region
+        .iter()
+        .filter_map(|row| parse_prompt_option(row))
+        .any(|option| option.selected);
+    let confirmation_hint = region.iter().rposition(|row| {
+        let lower = row.to_ascii_lowercase();
+        (lower.contains("press") && lower.contains("confirm"))
+            || lower.contains("choose how you'd like codex to proceed")
+    });
+    let Some(confirmation_hint) = confirmation_hint else {
+        return None;
+    };
+    if !has_selected_option
+        || region[confirmation_hint + 1..]
+            .iter()
+            .any(|row| !row.is_empty())
+    {
+        return None;
+    }
+    Some(region)
+}
+
+fn exact_options(region: &[String]) -> Option<Vec<PromptOption>> {
+    let options = region
+        .iter()
+        .filter_map(|row| parse_prompt_option(row))
+        .collect::<Vec<_>>();
+    let mut shortcuts = HashSet::new();
+    if options.is_empty()
+        || options
+            .iter()
+            .any(|option| !shortcuts.insert(option.shortcut))
+        || options.iter().filter(|option| option.selected).count() != 1
+    {
+        return None;
+    }
+    Some(options)
+}
+
+fn exact_target(
+    kind: CodexPromptKind,
+    action: CodexPromptPolicyAction,
+    options: Vec<PromptOption>,
+    expected_labels: &[&str],
+    dynamic_first_prefix: Option<&str>,
+    target: &str,
+) -> Option<CodexPromptMatch> {
+    if options.len() != expected_labels.len() {
+        return None;
+    }
+    for (index, (option, expected)) in options.iter().zip(expected_labels).enumerate() {
+        let matches = if index == 0 {
+            dynamic_first_prefix
+                .map(|prefix| option.label.starts_with(prefix))
+                .unwrap_or(option.label == *expected)
+        } else {
+            option.label == *expected
+        };
+        if !matches {
+            return None;
+        }
+    }
+    let targets = options
+        .iter()
+        .filter(|option| option.label == target)
+        .collect::<Vec<_>>();
+    if targets.len() != 1 {
+        return None;
+    }
+    let shortcut = targets[0].shortcut;
+    Some(CodexPromptMatch {
+        kind,
+        action,
+        shortcut,
+        fingerprint: prompt_fingerprint(kind, action, &options),
+    })
+}
+
+/// Classifies only the three Codex 0.144.6 model-choice prompts that preserve
+/// the current model. Input must be bounded visible terminal rows. Unknown,
+/// incomplete, ambiguous, or differently structured prompts fail closed.
+pub fn classify_codex_prompt(rows: &[String]) -> Option<CodexPromptMatch> {
+    if let Some(region) = prompt_region(rows, "Additional safety checks") {
+        let options = exact_options(&region)?;
+        let labels = options
+            .iter()
+            .map(|option| option.label.as_str())
+            .collect::<Vec<_>>();
+        let expected: &[&str] = match labels.as_slice() {
+            ["Retry with a faster model", "Keep waiting", "Learn more"] => {
+                &["Retry with a faster model", "Keep waiting", "Learn more"]
+            }
+            ["Keep waiting", "Learn more"] => &["Keep waiting", "Learn more"],
+            _ => return None,
+        };
+        return exact_target(
+            CodexPromptKind::AdditionalSafetyChecks,
+            CodexPromptPolicyAction::KeepWaiting,
+            options,
+            expected,
+            None,
+            "Keep waiting",
+        );
+    }
+
+    if let Some(region) = prompt_region(rows, "Approaching rate limits") {
+        return exact_target(
+            CodexPromptKind::ApproachingRateLimits,
+            CodexPromptPolicyAction::KeepCurrentModel,
+            exact_options(&region)?,
+            &[
+                "Switch to ",
+                "Keep current model",
+                "Keep current model (never show again)",
+            ],
+            Some("Switch to "),
+            "Keep current model",
+        );
+    }
+
+    if let Some(region) = prompt_region(rows, "Codex just got an upgrade.") {
+        return exact_target(
+            CodexPromptKind::ModelUpgrade,
+            CodexPromptPolicyAction::UseExistingModel,
+            exact_options(&region)?,
+            &["Try new model", "Use existing model"],
+            None,
+            "Use existing model",
+        );
+    }
+
+    None
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -147,6 +431,8 @@ pub struct ExplorerState {
     pub follow_mode: FollowMode,
     #[serde(default)]
     pub show_hidden: bool,
+    #[serde(default)]
+    pub codex_prompt_automation_mode: CodexPromptAutomationMode,
 }
 
 impl Default for ExplorerState {
@@ -159,6 +445,7 @@ impl Default for ExplorerState {
             expanded: BTreeSet::new(),
             follow_mode: FollowMode::Follow,
             show_hidden: true,
+            codex_prompt_automation_mode: CodexPromptAutomationMode::Observe,
         }
     }
 }
@@ -718,6 +1005,13 @@ pub fn process_is_tmux(process: Option<&str>) -> bool {
         .unwrap_or(false)
 }
 
+pub fn process_is_codex(process: Option<&str>) -> bool {
+    process
+        .and_then(|process| Path::new(process).file_name())
+        .map(|name| name == OsStr::new("codex"))
+        .unwrap_or(false)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TmuxPaneContext {
     pub path: PathBuf,
@@ -726,6 +1020,63 @@ pub struct TmuxPaneContext {
     pub geometry: TmuxPaneGeometry,
     pub panes: Vec<TmuxPaneSnapshot>,
     pub prefixes: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TmuxCodexPromptPane {
+    pub target_id: String,
+    pub tmux_executable: String,
+    pub socket_path: PathBuf,
+    pub pane_id: String,
+    pub window_id: String,
+    pub prompt: Option<CodexPromptMatch>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TmuxCodexPromptScan {
+    pub panes: Vec<TmuxCodexPromptPane>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TmuxCodexPromptChoiceResult {
+    pub target_id: String,
+    pub fingerprint: u64,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CodexPromptAuditEvent {
+    pub timestamp: u64,
+    pub registry_version: &'static str,
+    pub mode: CodexPromptAutomationMode,
+    pub prompt_kind: CodexPromptKind,
+    pub target_id: String,
+    pub policy_action: CodexPromptPolicyAction,
+    pub result: &'static str,
+}
+
+impl CodexPromptAuditEvent {
+    pub fn new(
+        mode: CodexPromptAutomationMode,
+        prompt_kind: CodexPromptKind,
+        target_id: String,
+        policy_action: CodexPromptPolicyAction,
+        result: &'static str,
+    ) -> Self {
+        Self {
+            timestamp: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+            registry_version: CODEX_PROMPT_REGISTRY_VERSION,
+            mode,
+            prompt_kind,
+            target_id,
+            policy_action,
+            result,
+        }
+    }
 }
 
 const TMUX_PREFIXES_MARKER: &str = "__COSMOS_PREFIXES__";
@@ -836,6 +1187,209 @@ pub fn tmux_pane_context(tty_name: &str, tmux_executable: &str) -> Result<TmuxPa
         return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
     }
     parse_tmux_pane_context(&String::from_utf8_lossy(&output.stdout))
+}
+
+fn tmux_command(
+    tmux_executable: &str,
+    socket_path: Option<&Path>,
+    arguments: &[&str],
+) -> Result<std::process::Output, String> {
+    let mut command = Command::new(tmux_executable);
+    if let Some(socket_path) = socket_path {
+        command.arg("-S").arg(socket_path);
+    }
+    command
+        .args(arguments)
+        .output()
+        .map_err(|error| format!("unable to query tmux: {error}"))
+}
+
+fn successful_tmux_output(output: std::process::Output) -> Result<Vec<u8>, String> {
+    if output.status.success() {
+        Ok(output.stdout)
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+    }
+}
+
+fn opaque_tmux_target_id(socket_path: &Path, pane_id: &str) -> String {
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in socket_path
+        .as_os_str()
+        .to_string_lossy()
+        .bytes()
+        .chain([0])
+        .chain(pane_id.bytes())
+    {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("{hash:016x}")
+}
+
+/// Scans only panes on the tmux server associated with `tty_name`. Terminal
+/// contents never leave this worker function: callers receive a strict prompt
+/// match or `None` for each exact Codex pane.
+pub fn scan_tmux_codex_prompts(tty_name: &str, tmux_executable: &str) -> TmuxCodexPromptScan {
+    let result = (|| -> Result<Vec<TmuxCodexPromptPane>, String> {
+        let socket_output = successful_tmux_output(tmux_command(
+            tmux_executable,
+            None,
+            &["display-message", "-p", "-t", tty_name, "#{socket_path}"],
+        )?)?;
+        let socket_path = PathBuf::from(String::from_utf8_lossy(&socket_output).trim());
+        if socket_path.as_os_str().is_empty() {
+            return Err("tmux returned an empty socket path".to_string());
+        }
+        let format = "#{pane_id}\u{1f}#{window_id}\u{1f}#{pane_current_command}\u{1f}#{pane_in_mode}\u{1f}#{pane_height}";
+        let pane_output = successful_tmux_output(tmux_command(
+            tmux_executable,
+            Some(&socket_path),
+            &["list-panes", "-a", "-F", format],
+        )?)?;
+        let mut panes = Vec::new();
+        for line in String::from_utf8_lossy(&pane_output).lines().take(64) {
+            let mut fields = line.split('\u{1f}');
+            let pane_id = fields.next().unwrap_or_default();
+            let window_id = fields.next().unwrap_or_default();
+            let current_command = fields.next().unwrap_or_default();
+            let pane_in_mode = fields.next().unwrap_or("1");
+            let pane_height = fields
+                .next()
+                .and_then(|height| height.parse::<usize>().ok())
+                .unwrap_or(0)
+                .clamp(1, 200);
+            if pane_id.is_empty() || window_id.is_empty() || current_command != "codex" {
+                continue;
+            }
+            let prompt = if pane_in_mode == "0" {
+                let start = format!("-{pane_height}");
+                tmux_command(
+                    tmux_executable,
+                    Some(&socket_path),
+                    &["capture-pane", "-p", "-t", pane_id, "-S", &start],
+                )
+                .and_then(successful_tmux_output)
+                .ok()
+                .map(|output| {
+                    String::from_utf8_lossy(&output)
+                        .lines()
+                        .map(ToOwned::to_owned)
+                        .collect::<Vec<_>>()
+                })
+                .and_then(|rows| classify_codex_prompt(&rows))
+            } else {
+                None
+            };
+            panes.push(TmuxCodexPromptPane {
+                target_id: opaque_tmux_target_id(&socket_path, pane_id),
+                tmux_executable: tmux_executable.to_string(),
+                socket_path: socket_path.clone(),
+                pane_id: pane_id.to_string(),
+                window_id: window_id.to_string(),
+                prompt,
+            });
+        }
+        Ok(panes)
+    })();
+    match result {
+        Ok(panes) => TmuxCodexPromptScan { panes, error: None },
+        Err(error) => TmuxCodexPromptScan {
+            panes: vec![],
+            error: Some(error),
+        },
+    }
+}
+
+/// Revalidates process, pane mode, complete prompt fingerprint, and shortcut
+/// before sending one literal digit to an exact inner tmux pane.
+pub fn send_tmux_codex_prompt_choice(
+    pane: &TmuxCodexPromptPane,
+    expected: &CodexPromptMatch,
+) -> Result<(), String> {
+    send_tmux_codex_prompt_choice_if(pane, expected, || true)
+}
+
+fn send_tmux_codex_prompt_choice_if(
+    pane: &TmuxCodexPromptPane,
+    expected: &CodexPromptMatch,
+    enabled: impl Fn() -> bool,
+) -> Result<(), String> {
+    if !enabled() {
+        return Err("Codex prompt automation is disabled".to_string());
+    }
+    if !expected.shortcut.is_ascii_digit() || expected.shortcut == '0' {
+        return Err("prompt shortcut is not a single nonzero digit".to_string());
+    }
+    let metadata = successful_tmux_output(tmux_command(
+        &pane.tmux_executable,
+        Some(&pane.socket_path),
+        &[
+            "display-message",
+            "-p",
+            "-t",
+            &pane.pane_id,
+            "#{pane_current_command}\u{1f}#{pane_in_mode}\u{1f}#{pane_height}",
+        ],
+    )?)?;
+    let metadata = String::from_utf8_lossy(&metadata);
+    let mut fields = metadata.trim().split('\u{1f}');
+    if fields.next() != Some("codex") || fields.next() != Some("0") {
+        return Err("tmux pane is no longer an interactive Codex pane".to_string());
+    }
+    let pane_height = fields
+        .next()
+        .and_then(|height| height.parse::<usize>().ok())
+        .unwrap_or(0)
+        .clamp(1, 200);
+    let start = format!("-{pane_height}");
+    let rows = successful_tmux_output(tmux_command(
+        &pane.tmux_executable,
+        Some(&pane.socket_path),
+        &["capture-pane", "-p", "-t", &pane.pane_id, "-S", &start],
+    )?)?;
+    let rows = String::from_utf8_lossy(&rows)
+        .lines()
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    let current = classify_codex_prompt(&rows)
+        .filter(|current| current == expected)
+        .ok_or_else(|| "Codex prompt changed before selection".to_string())?;
+    if !enabled() {
+        return Err("Codex prompt automation was disabled before selection".to_string());
+    }
+    let shortcut = current.shortcut.to_string();
+    successful_tmux_output(tmux_command(
+        &pane.tmux_executable,
+        Some(&pane.socket_path),
+        &["send-keys", "-t", &pane.pane_id, "-l", &shortcut],
+    )?)?;
+    Ok(())
+}
+
+fn append_codex_prompt_audit(path: &Path, event: &CodexPromptAuditEvent) -> io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut options = OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut permissions = file.metadata()?.permissions();
+        if permissions.mode() & 0o077 != 0 {
+            permissions.set_mode(0o600);
+            file.set_permissions(permissions)?;
+        }
+    }
+    serde_json::to_writer(&mut file, event)?;
+    file.write_all(b"\n")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1484,6 +2038,8 @@ fn codex_loop_count() -> usize {
 pub enum ServiceResponse {
     DirectoryListed(DirectoryListing),
     ContextResolved(PaneContext),
+    TmuxCodexPromptScanCompleted(TmuxCodexPromptScan),
+    TmuxCodexPromptChoiceCompleted(TmuxCodexPromptChoiceResult),
     GitStatusLoaded(GitStatusSnapshot),
     WorkspaceStatusLoaded(WorkspaceStatusSnapshot),
     FileSearchCompleted(FileSearchResult),
@@ -1496,6 +2052,18 @@ pub enum ServiceResponse {
 enum ContextRequest {
     Pane(PaneContextRequest),
     WorkspaceStatus(PathBuf),
+    TmuxCodexPromptScan {
+        tty_name: String,
+        tmux_executable: String,
+    },
+    TmuxCodexPromptChoice {
+        pane: TmuxCodexPromptPane,
+        expected: CodexPromptMatch,
+    },
+    CodexPromptAudit {
+        path: PathBuf,
+        event: CodexPromptAuditEvent,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -1777,6 +2345,7 @@ pub struct WorkspaceService {
     file_tx: Sender<FileRequest>,
     watch_tx: Sender<HashSet<PathBuf>>,
     response_rx: Receiver<ServiceResponse>,
+    codex_prompt_actions_enabled: Arc<AtomicBool>,
 }
 
 impl WorkspaceService {
@@ -1787,6 +2356,7 @@ impl WorkspaceService {
         let (file_tx, file_rx) = mpsc::channel::<FileRequest>();
         let (watch_tx, watch_rx) = mpsc::channel::<HashSet<PathBuf>>();
         let (response_tx, response_rx) = mpsc::channel();
+        let codex_prompt_actions_enabled = Arc::new(AtomicBool::new(false));
         let directory_response_tx = response_tx.clone();
         std::thread::Builder::new()
             .name("cosmos-directory-reader".to_string())
@@ -1804,6 +2374,7 @@ impl WorkspaceService {
             .expect("spawn cosmos directory reader");
 
         let context_response_tx = response_tx.clone();
+        let context_codex_prompt_actions_enabled = Arc::clone(&codex_prompt_actions_enabled);
         std::thread::Builder::new()
             .name("cosmos-pane-context".to_string())
             .spawn(move || {
@@ -1815,6 +2386,29 @@ impl WorkspaceService {
                         }
                         ContextRequest::WorkspaceStatus(codex_home) => {
                             ServiceResponse::WorkspaceStatusLoaded(status_reader.read(&codex_home))
+                        }
+                        ContextRequest::TmuxCodexPromptScan {
+                            tty_name,
+                            tmux_executable,
+                        } => ServiceResponse::TmuxCodexPromptScanCompleted(
+                            scan_tmux_codex_prompts(&tty_name, &tmux_executable),
+                        ),
+                        ContextRequest::TmuxCodexPromptChoice { pane, expected } => {
+                            let error = send_tmux_codex_prompt_choice_if(&pane, &expected, || {
+                                context_codex_prompt_actions_enabled.load(Ordering::Acquire)
+                            })
+                            .err();
+                            ServiceResponse::TmuxCodexPromptChoiceCompleted(
+                                TmuxCodexPromptChoiceResult {
+                                    target_id: pane.target_id,
+                                    fingerprint: expected.fingerprint,
+                                    error,
+                                },
+                            )
+                        }
+                        ContextRequest::CodexPromptAudit { path, event } => {
+                            let _ = append_codex_prompt_audit(&path, &event);
+                            continue;
                         }
                     };
                     if context_response_tx.send(response).is_err() {
@@ -1928,6 +2522,7 @@ impl WorkspaceService {
             file_tx,
             watch_tx,
             response_rx,
+            codex_prompt_actions_enabled,
         }
     }
 
@@ -1943,6 +2538,30 @@ impl WorkspaceService {
         let _ = self
             .context_tx
             .send(ContextRequest::WorkspaceStatus(codex_home));
+    }
+
+    pub fn scan_tmux_codex_prompts(&self, tty_name: String, tmux_executable: String) {
+        let _ = self.context_tx.send(ContextRequest::TmuxCodexPromptScan {
+            tty_name,
+            tmux_executable,
+        });
+    }
+
+    pub fn choose_tmux_codex_prompt(&self, pane: TmuxCodexPromptPane, expected: CodexPromptMatch) {
+        let _ = self
+            .context_tx
+            .send(ContextRequest::TmuxCodexPromptChoice { pane, expected });
+    }
+
+    pub fn set_codex_prompt_actions_enabled(&self, enabled: bool) {
+        self.codex_prompt_actions_enabled
+            .store(enabled, Ordering::Release);
+    }
+
+    pub fn audit_codex_prompt(&self, path: PathBuf, event: CodexPromptAuditEvent) {
+        let _ = self
+            .context_tx
+            .send(ContextRequest::CodexPromptAudit { path, event });
     }
 
     pub fn git_status(&self, root: PathBuf) {
@@ -1972,6 +2591,295 @@ impl Default for WorkspaceService {
 mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn prompt_rows(value: &str) -> Vec<String> {
+        value.lines().map(ToOwned::to_owned).collect()
+    }
+
+    #[test]
+    fn classifies_only_complete_preferred_codex_prompts() {
+        let safety = classify_codex_prompt(&prompt_rows(
+            r#"
+Additional safety checks
+This request requires additional safety checks, which can take extra time.
+› 1. Retry with a faster model
+  2. Keep waiting
+  3. Learn more
+Press Enter to confirm or Esc to go back
+"#,
+        ))
+        .unwrap();
+        assert_eq!(safety.kind, CodexPromptKind::AdditionalSafetyChecks);
+        assert_eq!(safety.action, CodexPromptPolicyAction::KeepWaiting);
+        assert_eq!(safety.shortcut, '2');
+
+        let safety_without_retry = classify_codex_prompt(&prompt_rows(
+            r#"
+Additional safety checks
+This request requires additional safety checks, which can take extra time.
+› 1. Keep waiting
+  2. Learn more
+Press Enter to confirm or Esc to go back
+"#,
+        ))
+        .unwrap();
+        assert_eq!(safety_without_retry.shortcut, '1');
+
+        let rate_limit = classify_codex_prompt(&prompt_rows(
+            r#"
+Approaching rate limits
+Switch to gpt-5.4-mini for lower credit usage?
+› 1. Switch to gpt-5.4-mini
+  2. Keep current model
+  3. Keep current model (never show again)
+Press Enter to confirm or Esc to go back
+"#,
+        ))
+        .unwrap();
+        assert_eq!(rate_limit.kind, CodexPromptKind::ApproachingRateLimits);
+        assert_eq!(rate_limit.action, CodexPromptPolicyAction::KeepCurrentModel);
+        assert_eq!(rate_limit.shortcut, '2');
+
+        let migration = classify_codex_prompt(&prompt_rows(
+            r#"
+> Codex just got an upgrade. Introducing gpt-5.6.
+You can continue using gpt-5.5 if you prefer.
+Choose how you'd like Codex to proceed.
+› 1. Try new model
+  2. Use existing model
+Use Up/Down to move, press Enter to confirm
+"#,
+        ))
+        .unwrap();
+        assert_eq!(migration.kind, CodexPromptKind::ModelUpgrade);
+        assert_eq!(migration.action, CodexPromptPolicyAction::UseExistingModel);
+        assert_eq!(migration.shortcut, '2');
+    }
+
+    #[test]
+    fn codex_prompt_classifier_fails_closed() {
+        let missing_hint = prompt_rows(
+            r#"
+Additional safety checks
+› 1. Retry with a faster model
+  2. Keep waiting
+  3. Learn more
+"#,
+        );
+        assert!(classify_codex_prompt(&missing_hint).is_none());
+
+        let ambiguous_rate_limit = prompt_rows(
+            r#"
+Approaching rate limits
+› 1. Switch to gpt-5.4-mini
+  2. Keep current model
+  3. Keep current model
+  4. Keep current model (never show again)
+Press Enter to confirm or Esc to go back
+"#,
+        );
+        assert!(classify_codex_prompt(&ambiguous_rate_limit).is_none());
+
+        let approval = prompt_rows(
+            r#"
+Allow Codex to run this command?
+› 1. Yes, continue
+  2. No, go back
+Press Enter to confirm or Esc to go back
+"#,
+        );
+        assert!(classify_codex_prompt(&approval).is_none());
+
+        let old_scrollback = prompt_rows(
+            r#"
+Additional safety checks
+› 1. Retry with a faster model
+  2. Keep waiting
+  3. Learn more
+Press Enter to confirm or Esc to go back
+$ echo prompt cleared
+"#,
+        );
+        assert!(classify_codex_prompt(&old_scrollback).is_none());
+
+        let wrong_reminder_choice = prompt_rows(
+            r#"
+Approaching rate limits
+› 1. Switch to gpt-5.4-mini
+  2. Keep current model (never show again)
+Press Enter to confirm or Esc to go back
+"#,
+        );
+        assert!(classify_codex_prompt(&wrong_reminder_choice).is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_prompt_audit_is_owner_only_from_creation() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = temporary_path("codex-prompt-audit");
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("audit.jsonl");
+        let event = CodexPromptAuditEvent::new(
+            CodexPromptAutomationMode::Observe,
+            CodexPromptKind::ApproachingRateLimits,
+            "opaque-target".to_string(),
+            CodexPromptPolicyAction::KeepCurrentModel,
+            "observed",
+        );
+        append_codex_prompt_audit(&path, &event).unwrap();
+
+        assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        let audit = fs::read_to_string(path).unwrap();
+        assert!(audit.contains("\"result\":\"observed\""));
+        assert!(!audit.contains("Approaching rate limits"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn tmux_codex_prompt_choice_is_targeted_and_revalidated() {
+        use std::thread;
+
+        if Command::new("tmux").arg("-V").output().is_err() {
+            return;
+        }
+        let root = temporary_path("codex-prompt-tmux");
+        fs::create_dir_all(&root).unwrap();
+        let socket = PathBuf::from(format!(
+            "/tmp/cosmos-codex-prompts-{}-{}.sock",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .subsec_nanos()
+        ));
+        let codex = root.join("codex");
+        let source = root.join("codex.c");
+        fs::write(
+            &source,
+            b"#include <unistd.h>\nint main(void) { for (;;) pause(); }\n",
+        )
+        .unwrap();
+        let compiled = Command::new("/usr/bin/clang")
+            .arg(&source)
+            .arg("-o")
+            .arg(&codex)
+            .status()
+            .unwrap();
+        assert!(compiled.success());
+        let shell_command = format!("exec {}", codex.to_string_lossy());
+        let started = Command::new("tmux")
+            .arg("-f")
+            .arg("/dev/null")
+            .arg("-S")
+            .arg(&socket)
+            .args([
+                "new-session",
+                "-d",
+                "-s",
+                "cosmos-codex-prompt-test",
+                "-x",
+                "100",
+                "-y",
+                "30",
+                &shell_command,
+            ])
+            .status()
+            .unwrap();
+        assert!(started.success());
+
+        let test_result = (|| {
+            let mut pane_id = String::new();
+            let mut window_id = String::new();
+            for _ in 0..20 {
+                let output = tmux_command(
+                    "tmux",
+                    Some(&socket),
+                    &[
+                        "list-panes",
+                        "-F",
+                        "#{pane_id}\u{1f}#{window_id}\u{1f}#{pane_current_command}",
+                    ],
+                )
+                .and_then(successful_tmux_output)
+                .unwrap();
+                let line = String::from_utf8_lossy(&output);
+                let mut fields = line.trim().split('\u{1f}');
+                pane_id = fields.next().unwrap_or_default().to_string();
+                window_id = fields.next().unwrap_or_default().to_string();
+                if fields.next() == Some("codex") {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(25));
+            }
+            assert!(!pane_id.is_empty());
+            assert!(!window_id.is_empty());
+
+            let fixture = "\
+Approaching rate limits\n\
+Switch to gpt-5.4-mini for lower credit usage?\n\
+› 1. Switch to gpt-5.4-mini\n\
+  2. Keep current model\n\
+  3. Keep current model (never show again)\n\
+Press Enter to confirm or Esc to go back\n";
+            successful_tmux_output(
+                tmux_command(
+                    "tmux",
+                    Some(&socket),
+                    &["send-keys", "-t", &pane_id, "-l", fixture],
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            thread::sleep(Duration::from_millis(50));
+            let captured = tmux_command(
+                "tmux",
+                Some(&socket),
+                &["capture-pane", "-p", "-t", &pane_id],
+            )
+            .and_then(successful_tmux_output)
+            .unwrap();
+            let rows = String::from_utf8_lossy(&captured)
+                .lines()
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>();
+            let prompt = classify_codex_prompt(&rows).unwrap();
+            assert_eq!(prompt.shortcut, '2');
+
+            let pane = TmuxCodexPromptPane {
+                target_id: opaque_tmux_target_id(&socket, &pane_id),
+                tmux_executable: "tmux".to_string(),
+                socket_path: socket.clone(),
+                pane_id: pane_id.clone(),
+                window_id,
+                prompt: Some(prompt.clone()),
+            };
+            send_tmux_codex_prompt_choice(&pane, &prompt).unwrap();
+            thread::sleep(Duration::from_millis(50));
+            let after = tmux_command(
+                "tmux",
+                Some(&socket),
+                &["capture-pane", "-p", "-t", &pane_id],
+            )
+            .and_then(successful_tmux_output)
+            .unwrap();
+            assert_eq!(
+                String::from_utf8_lossy(&after)
+                    .trim_end()
+                    .lines()
+                    .last()
+                    .map(str::trim),
+                Some("2")
+            );
+        })();
+
+        let _ = tmux_command("tmux", Some(&socket), &["kill-server"]);
+        let _ = fs::remove_file(&socket);
+        let _ = fs::remove_dir_all(root);
+        test_result
+    }
 
     #[test]
     fn verifies_tmux_manager_close_lock_credentials() {

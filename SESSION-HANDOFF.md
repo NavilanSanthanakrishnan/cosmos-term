@@ -1,6 +1,6 @@
 # Cosmos Term Session Handoff
 
-Updated: 2026-07-19
+Updated: 2026-07-20
 
 ## Current state
 
@@ -14,6 +14,59 @@ Apple-silicon prerelease is
 Cosmos Term is a native WezTerm fork, not a wrapper. It retains terminal tabs,
 splits, rendering, Lua configuration, and mux behavior while adding the left
 explorer and using independent application/runtime identities.
+
+## 2026-07-20 release candidate
+
+- File preview now supports W/S one-line vertical scrolling,
+  Shift+W/Shift+S five-line jumps, A/D one-column horizontal scrolling, and
+  Shift+A/Shift+D eight-column jumps. Opening a file releases Explorer focus
+  so the document receives these keys.
+- Real tmux prefixes are buffered before file-workspace handling. Prefix+w and
+  prefix+s therefore remain tmux commands, while unprefixed W/S/A/D navigate
+  the owning file preview.
+- The bundled renderer is capped at 30 FPS. Codex prompt inspection records
+  only an output timestamp and waits for 200 ms of quiet before foreground
+  process lookup and parsing, avoiding per-output work during GLX streaming.
+- `featurerequest/codex-preferred-prompt-auto-selection.md` is implemented.
+  It defaults to observe mode, recognizes only three complete whitelisted
+  Codex selection prompts, and supports native and exact targeted tmux panes.
+  Command+Option+P cycles modes; Command+Option+Escape turns it off
+  immediately. The footer shows mode and successful-choice count.
+- The tmux action path revalidates exact command, pane mode, prompt,
+  fingerprint, and digit on the context worker. An atomic gate defaults to
+  disabled and is checked immediately before send. A process-wide reservation
+  prevents two Cosmos windows from acting on the same prompt.
+- Audit data is owner-only JSONL with minimal metadata and no terminal text,
+  prompt text, command, path, response, or conversation content.
+- The dedicated-socket prompt integration test sends only the preferred digit
+  to an exact disposable `codex` pane. The full workspace suite has 28 passing
+  tests; GUI/CLI/mux checks, release packaging, strict signature verification,
+  plist validation, and `git diff --check` pass.
+- The current packaged candidate is
+  `dist/Cosmos Term.app`, bundle ID `com.navilan.cosmos-term`, bundle version
+  `20260720105132`. Live installed Cosmos PID 40964 and default tmux client
+  `/dev/ttys000 $3 %10` remain protected and unchanged.
+- A background isolated launch with unique data/runtime roots averaged 0.395%
+  CPU over 20 steady-state samples. `vmmap` reported 85.8 MiB resident and
+  `footprint` recorded a 224.7 MiB peak. Its only child was `/bin/sleep`, the
+  worker sample was blocked in channel/`kevent`/Mach waits, and cleanup left
+  live PID 40964 plus the default tmux client unchanged.
+- Future Codex processes now use the preserved OpenAI-signed 0.144.6 binary
+  (`TeamIdentifier=2DC432GLL2`). The prior ad-hoc always-wait binary remains a
+  byte-for-byte private backup at
+  `~/.local/state/tmux-manager/codex-always-wait/codex-0.144.6-always-wait-adhoc`;
+  existing Codex processes were not stopped.
+- The official ChatGPT GUI marketplace Computer Use plugin is installed as
+  `1.0.1000387`, and fresh signed Codex successfully authenticated through its
+  trusted `node_repl` wrapper. The updated service is
+  `26.710.1000387`. Calculator acceptance then stopped fail-closed because the
+  Computer Use service reported that it was not approved to use Calculator;
+  Safari was not touched. This is the remaining external per-app
+  authorization requirement. No AppleScript, accessibility scripting,
+  CGEvent, browser automation, custom keyboard tool, or focus restoration was
+  used. The official API has no explicit never-activate flag.
+- GitHub project workflows are removed. Validation is local; publishing must
+  not invoke or add GitHub Actions.
 
 ## Verified behavior
 

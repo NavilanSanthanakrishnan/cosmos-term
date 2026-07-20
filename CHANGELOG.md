@@ -27,12 +27,23 @@ history remains available in `docs/changelog.md` and the retained Git history.
 - Made the five-row shortcuts accept macOS's normalized uppercase W/S events,
   where the character can retain the Shift meaning after the modifier flag is
   removed by the text-input pass.
+- Added W/S and Shift+W/Shift+S vertical file-preview scrolling plus A/D and
+  Shift+A/Shift+D horizontal scrolling, while preserving real tmux prefix
+  commands.
 - Added formatted Markdown preview, UTF-8 text preview, line-numbered editing,
   native path/mode navigation, and immediate terminal return.
 - Added 2 MiB file limits, workspace-boundary enforcement, atomic saves,
   permission preservation, external-revision conflict detection, and
   unsaved-close protection.
 - Moved explicit file saving to `Command+Return`.
+- Added fail-closed preferred-response handling for three exact Codex
+  model-choice prompts. Observe mode is the default; active mode supports
+  native panes and exact revalidated tmux targets without changing focus.
+- Added immediate prompt-automation controls, metadata-only owner-private
+  audit records, manual-input pause, and process-wide deduplication.
+- Capped the bundled renderer at 30 FPS and moved prompt inspection behind a
+  200 ms output quiet period to reduce GLX resume/streaming contention.
+- Removed the GitHub Actions workflow; project verification is local.
 
 ## 0.1.0-alpha.1 — 2026-07-18
 
