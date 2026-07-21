@@ -6,10 +6,10 @@ Updated: 2026-07-20
 
 V1 is implemented, packaged, and installed at
 `/Applications/Cosmos Term.app`. The source repository is public at
-`https://github.com/NavilanSanthanakrishnan/cosmos-term`; the product launch
+`https://github.com/NavilanSanthanakrishnan/Cosmos-Terms`; the product launch
 and lightweight system-capacity footer are merged on `main`. The latest public
 Apple-silicon prerelease is
-`https://github.com/NavilanSanthanakrishnan/cosmos-term/releases/tag/v0.1.0-alpha.2`.
+`https://github.com/NavilanSanthanakrishnan/Cosmos-Terms/releases/tag/v0.1.0-alpha.2`.
 
 Cosmos Term is a native WezTerm fork, not a wrapper. It retains terminal tabs,
 splits, rendering, Lua configuration, and mux behavior while adding the left
@@ -79,8 +79,8 @@ explorer and using independent application/runtime identities.
   and dependency review are local; publishing must not invoke or add GitHub
   Actions.
 - Public prerelease `v0.1.0-alpha.2` targets
-  `d0f928bc27f07db97bd219f212cb484b784bd407` at
-  `https://github.com/NavilanSanthanakrishnan/cosmos-term/releases/tag/v0.1.0-alpha.2`.
+  `4ae1c05078963a3d91d8da32deba988018f0719e` at
+  `https://github.com/NavilanSanthanakrishnan/Cosmos-Terms/releases/tag/v0.1.0-alpha.2`.
   Its 52,396,429-byte `Cosmos-Term-macos-arm64.zip` re-downloaded with
   SHA-256
   `d2aa1ce53a46cd9c05f1cef9f1ab09d5d7fbf789cb513cc03b9ef4979dd36ee4`;
