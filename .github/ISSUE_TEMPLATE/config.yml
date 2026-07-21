@@ -1,7 +1,7 @@
 blank_issues_enabled: false
 contact_links:
   - name: Questions and ideas
-    url: https://github.com/NavilanSanthanakrishnan/cosmos-term/discussions
+    url: https://github.com/NavilanSanthanakrishnan/Cosmos-Terms/discussions
     about: Ask for help or discuss an idea before opening an issue.
   - name: WezTerm upstream
     url: https://github.com/wezterm/wezterm

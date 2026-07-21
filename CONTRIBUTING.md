@@ -18,7 +18,7 @@ Cosmos currently targets macOS on Apple silicon.
 
 ```sh
 git clone --recurse-submodules \
-  https://github.com/NavilanSanthanakrishnan/cosmos-term.git
+  https://github.com/NavilanSanthanakrishnan/Cosmos-Terms.git
 cd cosmos-term
 cargo test -p cosmos-workspace
 cargo check -p wezterm-gui -p wezterm -p wezterm-mux-server

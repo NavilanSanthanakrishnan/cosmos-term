@@ -53,7 +53,7 @@ it cannot hide the workbench or leak a modified key into the shell.
 ### Download the macOS build
 
 1. Download the latest `Cosmos-Term-macos-arm64.zip` from
-   [Releases](https://github.com/NavilanSanthanakrishnan/cosmos-term/releases).
+   [Releases](https://github.com/NavilanSanthanakrishnan/Cosmos-Terms/releases).
 2. Unzip it and move `Cosmos Term.app` to `/Applications`.
 3. On first launch, Control-click the app and choose **Open**. This is required
    while release builds are ad-hoc signed rather than Apple-notarized.
@@ -72,7 +72,7 @@ Prerequisites:
 
 ```sh
 git clone --recurse-submodules \
-  https://github.com/NavilanSanthanakrishnan/cosmos-term.git
+  https://github.com/NavilanSanthanakrishnan/Cosmos-Terms.git
 cd cosmos-term
 cargo build --release -p wezterm-gui -p wezterm -p wezterm-mux-server
 ci/package-cosmos-macos.sh
@@ -260,8 +260,8 @@ Current scope is macOS on Apple silicon. Near-term work includes notarized
 release artifacts, automated release packaging, a newer WezTerm baseline, and
 careful expansion of the workbench without turning the Explorer into an editor.
 
-See [issues](https://github.com/NavilanSanthanakrishnan/cosmos-term/issues) and
-[discussions](https://github.com/NavilanSanthanakrishnan/cosmos-term/discussions)
+See [issues](https://github.com/NavilanSanthanakrishnan/Cosmos-Terms/issues) and
+[discussions](https://github.com/NavilanSanthanakrishnan/Cosmos-Terms/discussions)
 for active work.
 
 ## Contributing
